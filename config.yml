@@ -1,0 +1,121 @@
+# Bitfinex Data Controller Configuration
+application:
+  name: "bitfinex-data-controller"
+  version: "1.0.0"
+  log_level: "debug"  # debug, info, warn, error
+
+# WebSocket connection settings
+websocket:
+  url: "wss://api-pub.bitfinex.com/ws/2"
+  reconnect_interval: "5s"
+  heartbeat_timeout: "45s"
+  ping_interval: "30s"
+  max_connections: 5
+  connection_timeout: "10s"
+
+  # Bitfinex configuration flags (合算値: 537100288)
+  # TIMESTAMP(32768) + SEQ_ALL(65536) + OB_CHECKSUM(131072) + BULK_UPDATES(536870912)
+  conf_flags: 537100288
+
+# Symbols to subscribe to
+symbols:
+  - "tBTCUSD"
+  - "tETHUSD"
+  - "tLTCUSD"
+  - "tXRPUSD"
+
+# Channel subscriptions configuration
+channels:
+  ticker:
+    enabled: true
+    sampling_rate: "1s"  # Reduce from real-time to 1Hz
+
+  trades:
+    enabled: true
+    msg_type: "tu"  # Only save "trade updated" messages to avoid duplicates
+
+  books:
+    enabled: true
+    precision: "P0"  # P0, P1, P2, P3, P4
+    frequency: "F0"  # F0 (real-time), F1 (2 seconds)
+    length: 25      # 1, 25, 100, 250
+
+  raw_books:
+    enabled: true
+    precision: "R0"  # Raw order books
+    frequency: "F0"
+    length: 25
+
+# Data storage configuration
+storage:
+  base_path: "/Volumes/SSD/AI/Trade/TradeEngine2/data_controller/data"
+  segment_size_mb: 256  # Create new folder every 256MB
+  compression: "zstd"   # zstd, gzip, snappy
+  compression_level: 3
+
+  # Parquet writer settings
+  parquet:
+    row_group_size_mb: 64
+    flush_interval: "5s"
+    flush_row_count: 10000
+
+  # WAL (Write-Ahead Log) settings - for audit and recovery
+  wal:
+    enabled: true
+    compression: "zstd"
+    retention_hours: 24
+
+# Metadata and schema settings
+metadata:
+  schema_version: "bfx.v1"
+  include_checksum_validation: true
+  include_sequence_numbers: true
+  include_timestamps: true
+
+# Monitoring and metrics
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+
+  health_check:
+    enabled: true
+    port: 8080
+    path: "/health"
+
+  logging:
+    format: "json"  # json, text
+    output: "stdout"  # stdout, file
+    file_path: "/var/log/data-controller.log"
+
+# GUI settings
+gui:
+  title: "Bitfinex Data Controller"
+  width: 800
+  height: 600
+  theme: "dark"  # dark, light
+  auto_start: false
+  show_statistics: true
+  refresh_interval: "1s"
+
+# Performance and reliability settings
+performance:
+  buffer_size: 100000
+  worker_count: 4
+  max_memory_mb: 2048
+  gc_interval: "30s"
+
+  # Circuit breaker settings
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout: "30s"
+
+# Development and debugging
+debug:
+  enable_profiling: false
+  profiling_port: 6060
+  verbose_logging: false
+  save_raw_messages: true
+  simulate_network_issues: false
