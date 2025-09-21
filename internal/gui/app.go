@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/trade-engine/data-controller/internal/config"
-	"github.com/trade-engine/data-controller/internal/sink/parquet"
+	"github.com/trade-engine/data-controller/internal/sink/arrow"
 )
 
 type App struct {
@@ -22,7 +22,7 @@ type App struct {
 	logger          *zap.Logger
 	fyneApp         fyne.App
 	window          fyne.Window
-	parquetHandler  *parquet.Handler
+	arrowHandler    *arrow.Handler
 
 	// Control state
 	isRunning       bool
@@ -89,8 +89,8 @@ func (a *App) SetCallbacks(startCallback, stopCallback func() error) {
 	a.stopCallback = stopCallback
 }
 
-func (a *App) SetParquetHandler(handler *parquet.Handler) {
-	a.parquetHandler = handler
+func (a *App) SetArrowHandler(handler *arrow.Handler) {
+	a.arrowHandler = handler
 }
 
 func (a *App) setupUI() {
@@ -271,15 +271,15 @@ func (a *App) handleStop() {
 }
 
 func (a *App) handleForceFlush() {
-	if a.parquetHandler == nil {
-		a.logger.Error("Parquet handler not set")
+	if a.arrowHandler == nil {
+		a.logger.Error("Arrow handler not set")
 		return
 	}
 
 	a.logger.Info("Force flushing data from GUI")
 
 	go func() {
-		if err := a.parquetHandler.ForceFlush(); err != nil {
+		if err := a.arrowHandler.ForceFlush(); err != nil {
 			a.logger.Error("Failed to force flush", zap.Error(err))
 		}
 	}()
@@ -301,12 +301,12 @@ func (a *App) startUpdateRoutine() {
 }
 
 func (a *App) updateStatistics() {
-	if a.parquetHandler == nil {
+	if a.arrowHandler == nil {
 		return
 	}
 
-	stats := a.parquetHandler.GetStatistics()
-	writerStats := a.parquetHandler.GetWriterStats()
+	stats := a.arrowHandler.GetStatistics()
+	writerStats := a.arrowHandler.GetWriterStats()
 
 	a.tickersLabel.SetText(fmt.Sprintf("Tickers: %d", stats.TickersReceived))
 	a.tradesLabel.SetText(fmt.Sprintf("Trades: %d", stats.TradesReceived))

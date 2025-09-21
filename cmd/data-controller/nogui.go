@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,46 +12,25 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/trade-engine/data-controller/internal/config"
-	"github.com/trade-engine/data-controller/internal/sink/parquet"
+	"github.com/trade-engine/data-controller/internal/sink/arrow"
 	"github.com/trade-engine/data-controller/internal/ws"
 )
 
 type NoGUIApplication struct {
-	cfg               *config.Config
-	logger            *zap.Logger
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
+	cfg    *config.Config
+	logger *zap.Logger
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	// Components
 	router            *ws.Router
 	connectionManager *ws.ConnectionManager
-	parquetHandler    *parquet.Handler
+	arrowHandler      *arrow.Handler
 
 	// State
-	isRunning         bool
-	isRunningMutex    sync.RWMutex
-}
-
-func main() {
-	configPath := flag.String("config", "config.yml", "Path to configuration file")
-	noGUI := flag.Bool("nogui", false, "Run without GUI")
-	flag.Parse()
-
-	if *noGUI {
-		app, err := NewNoGUIApplication(*configPath)
-		if err != nil {
-			panic(err)
-		}
-
-		if err := app.Run(); err != nil {
-			app.logger.Fatal("Application failed", zap.Error(err))
-		}
-	} else {
-		// GUI version - not implemented in this binary
-		fmt.Println("GUI mode not available in this build. Use -nogui flag.")
-		os.Exit(1)
-	}
+	isRunning      bool
+	isRunningMutex sync.RWMutex
 }
 
 func NewNoGUIApplication(configPath string) (*NoGUIApplication, error) {
@@ -88,11 +66,11 @@ func (a *NoGUIApplication) initializeComponents() error {
 	// Initialize router
 	a.router = ws.NewRouter(a.logger)
 
-	// Initialize parquet handler
-	a.parquetHandler = parquet.NewHandler(a.cfg, a.logger)
+	// Initialize arrow handler
+	a.arrowHandler = arrow.NewHandler(a.cfg, a.logger)
 
 	// Set router handler
-	a.router.SetHandler(a.parquetHandler)
+	a.router.SetHandler(a.arrowHandler)
 
 	// Initialize connection manager
 	a.connectionManager = ws.NewConnectionManager(a.cfg, a.logger, a.router)
@@ -102,7 +80,7 @@ func (a *NoGUIApplication) initializeComponents() error {
 }
 
 func (a *NoGUIApplication) Run() error {
-	a.logger.Info("Starting Bitfinex Data Controller (No GUI Mode)",
+	a.logger.Info("Starting Data Controller (No GUI Mode)",
 		zap.String("version", a.cfg.Application.Version),
 		zap.Strings("symbols", a.cfg.Symbols))
 
@@ -110,12 +88,13 @@ func (a *NoGUIApplication) Run() error {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start data collection automatically
+	// Auto-start data collection
 	if err := a.startDataCollection(); err != nil {
-		return fmt.Errorf("failed to start data collection: %w", err)
+		a.logger.Error("Failed to start data collection", zap.Error(err))
+		return err
 	}
 
-	// Print status
+	// Print ready status
 	fmt.Printf("Data collection started successfully!\n")
 	fmt.Printf("Collecting data for symbols: %v\n", a.cfg.Symbols)
 	fmt.Printf("Storage path: %s\n", a.cfg.Storage.BasePath)
@@ -143,9 +122,9 @@ func (a *NoGUIApplication) statusReporter() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			if a.parquetHandler != nil {
-				stats := a.parquetHandler.GetStatistics()
-				writerStats := a.parquetHandler.GetWriterStats()
+			if a.arrowHandler != nil {
+				stats := a.arrowHandler.GetStatistics()
+				writerStats := a.arrowHandler.GetWriterStats()
 
 				a.logger.Info("Status Report",
 					zap.Int64("tickers", stats.TickersReceived),
@@ -169,14 +148,14 @@ func (a *NoGUIApplication) startDataCollection() error {
 
 	a.logger.Info("Starting data collection")
 
-	// Start parquet handler
-	if err := a.parquetHandler.Start(); err != nil {
+	// Start arrow handler
+	if err := a.arrowHandler.Start(); err != nil {
 		return err
 	}
 
 	// Start connection manager
 	if err := a.connectionManager.Start(); err != nil {
-		a.parquetHandler.Stop()
+		a.arrowHandler.Stop()
 		return err
 	}
 
@@ -199,9 +178,9 @@ func (a *NoGUIApplication) stopDataCollection() error {
 	// Stop connection manager
 	a.connectionManager.Stop()
 
-	// Stop parquet handler
-	if err := a.parquetHandler.Stop(); err != nil {
-		a.logger.Error("Failed to stop parquet handler", zap.Error(err))
+	// Stop arrow handler
+	if err := a.arrowHandler.Stop(); err != nil {
+		a.logger.Error("Failed to stop arrow handler", zap.Error(err))
 	}
 
 	a.isRunning = false

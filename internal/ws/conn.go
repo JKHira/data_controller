@@ -292,6 +292,25 @@ func (c *Connection) disconnect() {
 	if c.conn != nil {
 		c.logger.Info("Closing WebSocket connection")
 
+		// Unsubscribe from all channels first
+		c.channelsMutex.RLock()
+		for chanID, channelInfo := range c.channels {
+			c.logger.Info("Unsubscribing from channel",
+				zap.Int32("chan_id", chanID),
+				zap.String("channel", channelInfo.Channel),
+				zap.String("symbol", channelInfo.Symbol))
+
+			unsubMsg := map[string]interface{}{
+				"event":  "unsubscribe",
+				"chanId": chanID,
+			}
+			c.conn.WriteJSON(unsubMsg)
+		}
+		c.channelsMutex.RUnlock()
+
+		// Give time for unsubscribe messages to be sent
+		time.Sleep(100 * time.Millisecond)
+
 		// Send close frame
 		c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 
@@ -378,24 +397,42 @@ func (c *Connection) readLoop(ctx context.Context) {
 }
 
 func (c *Connection) processMessage(data []byte) error {
+	c.logger.Debug("Processing raw message", zap.String("message", string(data)))
+
 	var rawMsg json.RawMessage
 	if err := json.Unmarshal(data, &rawMsg); err != nil {
 		return fmt.Errorf("failed to unmarshal raw message: %w", err)
 	}
 
+	// Try to parse as object first (info, subscribed events)
+	var objMsg map[string]interface{}
+	if err := json.Unmarshal(rawMsg, &objMsg); err == nil {
+		if event, ok := objMsg["event"].(string); ok {
+			switch event {
+			case "info":
+				var info InfoMessage
+				if err := json.Unmarshal(rawMsg, &info); err == nil {
+					return c.handleInfoMessage(&info)
+				}
+			case "subscribed":
+				var subResp SubscribeResponse
+				if err := json.Unmarshal(rawMsg, &subResp); err == nil {
+					c.logger.Info("Processing subscription response",
+						zap.String("event", subResp.Event),
+						zap.String("channel", subResp.Channel),
+						zap.Int32("chan_id", subResp.ChanID),
+						zap.String("symbol", subResp.Symbol))
+					return c.handleSubscribeResponse(&subResp)
+				}
+			}
+		}
+	}
+
+	// Try to parse as array (data messages)
 	var array []json.RawMessage
 	if err := json.Unmarshal(rawMsg, &array); err != nil {
-		var info InfoMessage
-		if err := json.Unmarshal(rawMsg, &info); err == nil {
-			return c.handleInfoMessage(&info)
-		}
-
-		var subResp SubscribeResponse
-		if err := json.Unmarshal(rawMsg, &subResp); err == nil {
-			return c.handleSubscribeResponse(&subResp)
-		}
-
-		return fmt.Errorf("unknown message format")
+		c.logger.Warn("Failed to parse message as object or array", zap.String("message", string(data)))
+		return nil
 	}
 
 	if len(array) < 2 {
@@ -457,12 +494,24 @@ func (c *Connection) handleSubscribeResponse(resp *SubscribeResponse) error {
 		zap.String("symbol", resp.Symbol),
 		zap.String("pair", resp.Pair))
 
+	// Find corresponding subscription request
+	var subReq *SubscribeRequest
+	c.queueMutex.Lock()
+	for i, req := range c.subscribeQueue {
+		if req.Channel == resp.Channel && req.Symbol == resp.Symbol {
+			subReq = &c.subscribeQueue[i]
+			break
+		}
+	}
+	c.queueMutex.Unlock()
+
 	channelInfo := &ChannelInfo{
 		ID:      resp.ChanID,
 		Channel: resp.Channel,
 		Symbol:  resp.Symbol,
 		Pair:    resp.Pair,
 		SubID:   resp.SubID,
+		SubReq:  *subReq,
 	}
 
 	c.channelsMutex.Lock()
@@ -472,6 +521,11 @@ func (c *Connection) handleSubscribeResponse(resp *SubscribeResponse) error {
 	c.heartbeatMutex.Lock()
 	c.lastHeartbeat[resp.ChanID] = time.Now()
 	c.heartbeatMutex.Unlock()
+
+	c.logger.Info("Channel mapping created",
+		zap.Int32("chan_id", resp.ChanID),
+		zap.String("channel", resp.Channel),
+		zap.String("symbol", resp.Symbol))
 
 	return nil
 }

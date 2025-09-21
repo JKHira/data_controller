@@ -1,4 +1,4 @@
-package parquet
+package arrow
 
 import (
 	"sync"
@@ -10,6 +10,8 @@ import (
 	"github.com/trade-engine/data-controller/pkg/schema"
 )
 
+type DataCallback func(dataType, symbol string, data interface{})
+
 type Handler struct {
 	cfg         *config.Config
 	logger      *zap.Logger
@@ -18,6 +20,10 @@ type Handler struct {
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 	stats       *Statistics
+
+	// GUI data streaming
+	callbacks   []DataCallback
+	callbacksMu sync.RWMutex
 }
 
 type Statistics struct {
@@ -34,18 +40,41 @@ type Statistics struct {
 
 func NewHandler(cfg *config.Config, logger *zap.Logger) *Handler {
 	return &Handler{
-		cfg:    cfg,
-		logger: logger,
-		writer: NewWriter(cfg, logger),
-		stats:  &Statistics{},
-		stopCh: make(chan struct{}),
+		cfg:       cfg,
+		logger:    logger,
+		writer:    NewWriter(cfg, logger),
+		stats:     &Statistics{},
+		stopCh:    make(chan struct{}),
+		callbacks: make([]DataCallback, 0),
+	}
+}
+
+func (h *Handler) RegisterDataCallback(callback DataCallback) {
+	h.callbacksMu.Lock()
+	defer h.callbacksMu.Unlock()
+	h.callbacks = append(h.callbacks, callback)
+}
+
+func (h *Handler) broadcastData(dataType, symbol string, data interface{}) {
+	h.callbacksMu.RLock()
+	defer h.callbacksMu.RUnlock()
+
+	for _, callback := range h.callbacks {
+		// Non-blocking call to prevent GUI from blocking data processing
+		go callback(dataType, symbol, data)
 	}
 }
 
 func (h *Handler) Start() error {
-	h.logger.Info("Starting Parquet handler")
+	h.logger.Info("Starting Arrow handler")
 
-	h.flushTicker = time.NewTicker(h.cfg.Storage.Parquet.FlushInterval)
+	// Make the flush ticker safe
+	d := h.cfg.Storage.Parquet.FlushInterval
+	if d <= 0 {
+		d = 2 * time.Second // sensible default
+		h.logger.Warn("Invalid flush interval, using default", zap.Duration("default", d))
+	}
+	h.flushTicker = time.NewTicker(d)
 
 	h.wg.Add(1)
 	go h.flushRoutine()
@@ -54,7 +83,7 @@ func (h *Handler) Start() error {
 }
 
 func (h *Handler) Stop() error {
-	h.logger.Info("Stopping Parquet handler")
+	h.logger.Info("Stopping Arrow handler")
 
 	close(h.stopCh)
 
@@ -69,7 +98,7 @@ func (h *Handler) Stop() error {
 		return err
 	}
 
-	h.logger.Info("Parquet handler stopped")
+	h.logger.Info("Arrow handler stopped")
 	return nil
 }
 
@@ -82,6 +111,9 @@ func (h *Handler) HandleTicker(ticker *schema.Ticker) {
 		zap.String("symbol", ticker.Symbol),
 		zap.Float64("bid", ticker.Bid),
 		zap.Float64("ask", ticker.Ask))
+
+	// Broadcast to GUI first (non-blocking)
+	h.broadcastData("ticker", ticker.Symbol, ticker)
 
 	if err := h.writer.WriteTicker(ticker); err != nil {
 		h.logger.Error("Failed to write ticker",
@@ -98,6 +130,9 @@ func (h *Handler) HandleTrade(trade *schema.Trade) {
 	h.stats.TradesReceived++
 	h.stats.mu.Unlock()
 
+	// Broadcast to GUI first (non-blocking)
+	h.broadcastData("trade", trade.Symbol, trade)
+
 	if err := h.writer.WriteTrade(trade); err != nil {
 		h.logger.Error("Failed to write trade",
 			zap.String("symbol", trade.Symbol),
@@ -112,6 +147,9 @@ func (h *Handler) HandleBookLevel(level *schema.BookLevel) {
 	h.stats.BookLevelsReceived++
 	h.stats.mu.Unlock()
 
+	// Broadcast to GUI first (non-blocking)
+	h.broadcastData("book", level.Symbol, level)
+
 	if err := h.writer.WriteBookLevel(level); err != nil {
 		h.logger.Error("Failed to write book level",
 			zap.String("symbol", level.Symbol),
@@ -125,6 +163,9 @@ func (h *Handler) HandleRawBookEvent(event *schema.RawBookEvent) {
 	h.stats.mu.Lock()
 	h.stats.RawBookEventsReceived++
 	h.stats.mu.Unlock()
+
+	// Broadcast to GUI first (non-blocking)
+	h.broadcastData("raw_book", event.Symbol, event)
 
 	if err := h.writer.WriteRawBookEvent(event); err != nil {
 		h.logger.Error("Failed to write raw book event",
@@ -167,6 +208,9 @@ func (h *Handler) flush() {
 		h.incrementError()
 		return
 	}
+
+	// Optional: time-based rotation for segments older than 15 minutes
+	h.writer.RotateOldSegments(15 * time.Minute)
 
 	duration := time.Since(start)
 

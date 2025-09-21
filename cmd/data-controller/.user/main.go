@@ -13,26 +13,26 @@ import (
 
 	"github.com/trade-engine/data-controller/internal/config"
 	"github.com/trade-engine/data-controller/internal/gui"
-	"github.com/trade-engine/data-controller/internal/sink/parquet"
+	"github.com/trade-engine/data-controller/internal/sink/arrow"
 	"github.com/trade-engine/data-controller/internal/ws"
 )
 
 type Application struct {
-	cfg               *config.Config
-	logger            *zap.Logger
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
+	cfg    *config.Config
+	logger *zap.Logger
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	// Components
 	router            *ws.Router
 	connectionManager *ws.ConnectionManager
-	parquetHandler    *parquet.Handler
+	arrowHandler      *arrow.Handler
 	guiApp            *gui.App
 
 	// State
-	isRunning         bool
-	isRunningMutex    sync.RWMutex
+	isRunning      bool
+	isRunningMutex sync.RWMutex
 }
 
 func main() {
@@ -82,18 +82,18 @@ func (a *Application) initializeComponents() error {
 	// Initialize router
 	a.router = ws.NewRouter(a.logger)
 
-	// Initialize parquet handler
-	a.parquetHandler = parquet.NewHandler(a.cfg, a.logger)
+	// Initialize arrow handler
+	a.arrowHandler = arrow.NewHandler(a.cfg, a.logger)
 
 	// Set router handler
-	a.router.SetHandler(a.parquetHandler)
+	a.router.SetHandler(a.arrowHandler)
 
 	// Initialize connection manager
 	a.connectionManager = ws.NewConnectionManager(a.cfg, a.logger, a.router)
 
 	// Initialize GUI
 	a.guiApp = gui.NewApp(a.cfg, a.logger)
-	a.guiApp.SetParquetHandler(a.parquetHandler)
+	a.guiApp.SetArrowHandler(a.arrowHandler)
 	a.guiApp.SetCallbacks(a.startDataCollection, a.stopDataCollection)
 
 	a.logger.Info("Components initialized successfully")
@@ -101,7 +101,7 @@ func (a *Application) initializeComponents() error {
 }
 
 func (a *Application) Run() error {
-	a.logger.Info("Starting Bitfinex Data Controller",
+	a.logger.Info("Starting Data Controller",
 		zap.String("version", a.cfg.Application.Version),
 		zap.Strings("symbols", a.cfg.Symbols))
 
@@ -132,14 +132,14 @@ func (a *Application) startDataCollection() error {
 
 	a.logger.Info("Starting data collection")
 
-	// Start parquet handler
-	if err := a.parquetHandler.Start(); err != nil {
+	// Start arrow handler
+	if err := a.arrowHandler.Start(); err != nil {
 		return err
 	}
 
 	// Start connection manager
 	if err := a.connectionManager.Start(); err != nil {
-		a.parquetHandler.Stop()
+		a.arrowHandler.Stop()
 		return err
 	}
 
@@ -162,9 +162,9 @@ func (a *Application) stopDataCollection() error {
 	// Stop connection manager
 	a.connectionManager.Stop()
 
-	// Stop parquet handler
-	if err := a.parquetHandler.Stop(); err != nil {
-		a.logger.Error("Failed to stop parquet handler", zap.Error(err))
+	// Stop arrow handler
+	if err := a.arrowHandler.Stop(); err != nil {
+		a.logger.Error("Failed to stop arrow handler", zap.Error(err))
 	}
 
 	a.isRunning = false

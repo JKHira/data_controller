@@ -1,8 +1,8 @@
-# Bitfinex Data Controller Configuration
+# Data Controller Configuration
 application:
-  name: "bitfinex-data-controller"
+  name: "data-controller"
   version: "1.0.0"
-  log_level: "debug"  # debug, info, warn, error
+  log_level: "debug" # debug, info, warn, error
 
 # WebSocket connection settings
 websocket:
@@ -19,38 +19,36 @@ websocket:
 
 # Symbols to subscribe to
 symbols:
-  - "tBTCUSD"
-  - "tETHUSD"
-  - "tLTCUSD"
-  - "tXRPUSD"
+  - "tBTCUSDT"
+  #- "tETHUSD"
 
 # Channel subscriptions configuration
 channels:
   ticker:
     enabled: true
-    sampling_rate: "1s"  # Reduce from real-time to 1Hz
+    sampling_rate: "1s" # Reduce from real-time to 1Hz
 
   trades:
     enabled: true
-    msg_type: "tu"  # Only save "trade updated" messages to avoid duplicates
+    msg_type: "tu" # Only save "trade updated" messages to avoid duplicates
 
   books:
     enabled: true
-    precision: "P0"  # P0, P1, P2, P3, P4
-    frequency: "F0"  # F0 (real-time), F1 (2 seconds)
-    length: 25      # 1, 25, 100, 250
+    precision: "P0" # P0, P1, P2, P3, P4
+    frequency: "F0" # F0 (real-time), F1 (2 seconds)
+    length: 25 # 1, 25, 100, 250
 
   raw_books:
     enabled: true
-    precision: "R0"  # Raw order books
+    precision: "R0" # Raw order books
     frequency: "F0"
     length: 25
 
 # Data storage configuration
 storage:
   base_path: "/Volumes/SSD/AI/Trade/TradeEngine2/data_controller/data"
-  segment_size_mb: 256  # Create new folder every 256MB
-  compression: "zstd"   # zstd, gzip, snappy
+  segment_size_mb: 256 # Create new folder every 256MB
+  compression: "zstd" # zstd, gzip, snappy
   compression_level: 3
 
   # Parquet writer settings
@@ -85,16 +83,16 @@ monitoring:
     path: "/health"
 
   logging:
-    format: "json"  # json, text
-    output: "stdout"  # stdout, file
+    format: "json" # json, text
+    output: "stdout" # stdout, file
     file_path: "/var/log/data-controller.log"
 
 # GUI settings
 gui:
-  title: "Bitfinex Data Controller"
+  title: "Data Controller"
   width: 800
   height: 600
-  theme: "dark"  # dark, light
+  theme: "dark" # dark, light
   auto_start: false
   show_statistics: true
   refresh_interval: "1s"

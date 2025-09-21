@@ -1,15 +1,17 @@
-package parquet
+package arrow
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/apache/arrow/go/v17/arrow"
+	"github.com/apache/arrow/go/v17/arrow/array"
+	"github.com/apache/arrow/go/v17/arrow/ipc"
+	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/google/uuid"
-	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 
 	"github.com/trade-engine/data-controller/internal/config"
@@ -17,13 +19,15 @@ import (
 )
 
 type Writer struct {
-	cfg            *config.Config
-	logger         *zap.Logger
-	segments       map[string]*Segment
-	segmentsMutex  sync.RWMutex
-	basePath       string
-	segmentSizeMB  int64
-	ingestID       string
+	cfg          *config.Config
+	logger       *zap.Logger
+	basePath     string
+	ingestID     string
+
+	// Segment management
+	segments     map[string]*Segment
+	segmentsMutex sync.RWMutex
+	segmentSizeMB int64
 }
 
 type Segment struct {
@@ -36,43 +40,47 @@ type Segment struct {
 	Writers       map[string]*ChannelWriter
 	WritersMutex  sync.RWMutex
 	CurrentSizeMB int64
-	Manifest      *schema.SegmentManifest
 	IsOpen        bool
 	Mutex         sync.Mutex
 }
 
 type ChannelWriter struct {
 	FilePath     string
-	Writer       interface{}
-	RowCount     int64
-	LastFlush    time.Time
 	TempFilePath string
+	File         *os.File
+	Writer       *ipc.FileWriter
+	Schema       *arrow.Schema
+	Builder      *RecordBuilder
+	RowCount     int64
+	StartTime    time.Time
+	Channel      schema.Channel
+	Symbol       string
 	Mutex        sync.Mutex
+	IsOpen       bool
+	Pool         memory.Allocator
 }
 
-type FlushStats struct {
-	Channel     schema.Channel
-	Symbol      string
-	RowCount    int64
-	FileSizeMB  float64
-	Duration    time.Duration
-	Timestamp   time.Time
+type RecordBuilder struct {
+	schema *arrow.Schema
+	builders []array.Builder
+	pool   memory.Allocator
 }
 
 func NewWriter(cfg *config.Config, logger *zap.Logger) *Writer {
 	return &Writer{
 		cfg:           cfg,
 		logger:        logger,
-		segments:      make(map[string]*Segment),
 		basePath:      cfg.Storage.BasePath,
-		segmentSizeMB: int64(cfg.Storage.SegmentSizeMB),
 		ingestID:      uuid.New().String(),
+		segments:      make(map[string]*Segment),
+		segmentSizeMB: int64(cfg.Storage.SegmentSizeMB),
 	}
 }
 
 func (w *Writer) WriteRawBookEvent(event *schema.RawBookEvent) error {
 	event.IngestID = w.ingestID
 	event.SourceFile = "websocket"
+	event.TsMicros = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelRawBooks, event.Symbol)
 	if err != nil {
@@ -84,12 +92,13 @@ func (w *Writer) WriteRawBookEvent(event *schema.RawBookEvent) error {
 		return fmt.Errorf("failed to get writer: %w", err)
 	}
 
-	return writer.writeRow(event)
+	return writer.writeRawBookEvent(event)
 }
 
 func (w *Writer) WriteBookLevel(level *schema.BookLevel) error {
 	level.IngestID = w.ingestID
 	level.SourceFile = "websocket"
+	level.TsMicros = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelBooks, level.Symbol)
 	if err != nil {
@@ -101,12 +110,13 @@ func (w *Writer) WriteBookLevel(level *schema.BookLevel) error {
 		return fmt.Errorf("failed to get writer: %w", err)
 	}
 
-	return writer.writeRow(level)
+	return writer.writeBookLevel(level)
 }
 
 func (w *Writer) WriteTrade(trade *schema.Trade) error {
 	trade.IngestID = w.ingestID
 	trade.SourceFile = "websocket"
+	trade.TsMicros = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelTrades, trade.Symbol)
 	if err != nil {
@@ -118,12 +128,13 @@ func (w *Writer) WriteTrade(trade *schema.Trade) error {
 		return fmt.Errorf("failed to get writer: %w", err)
 	}
 
-	return writer.writeRow(trade)
+	return writer.writeTrade(trade)
 }
 
 func (w *Writer) WriteTicker(ticker *schema.Ticker) error {
 	ticker.IngestID = w.ingestID
 	ticker.SourceFile = "websocket"
+	ticker.TsMicros = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelTicker, ticker.Symbol)
 	if err != nil {
@@ -135,7 +146,7 @@ func (w *Writer) WriteTicker(ticker *schema.Ticker) error {
 		return fmt.Errorf("failed to get writer: %w", err)
 	}
 
-	return writer.writeRow(ticker)
+	return writer.writeTicker(ticker)
 }
 
 func (w *Writer) getOrCreateSegment(channel schema.Channel, symbol string) (*Segment, error) {
@@ -196,22 +207,6 @@ func (w *Writer) createNewSegment(channel schema.Channel, symbol string, segment
 		DirPath:   dirPath,
 		Writers:   make(map[string]*ChannelWriter),
 		IsOpen:    true,
-		Manifest: &schema.SegmentManifest{
-			SchemaVersion:  "bfx.v1",
-			Exchange:       "bitfinex",
-			Channel:        string(channel),
-			Symbol:         symbol,
-			PairOrCurrency: symbol,
-			WSURL:          "wss://api-pub.bitfinex.com/ws/2",
-			ConnID:         w.ingestID,
-			ConfFlags:      w.cfg.WebSocket.ConfFlags,
-			Segment: schema.SegmentInfo{
-				BytesTarget: w.segmentSizeMB * 1024 * 1024,
-				UTCStart:    now,
-				Files:       make([]string, 0),
-			},
-			Quality: schema.QualityMetrics{},
-		},
 	}
 
 	w.segmentsMutex.Lock()
@@ -243,195 +238,75 @@ func (s *Segment) getOrCreateWriter(channel schema.Channel, symbol string, cfg *
 
 func (s *Segment) createNewWriter(channel schema.Channel, symbol string, cfg *config.Config, writerKey string) (*ChannelWriter, error) {
 	now := time.Now().UTC()
-	filename := fmt.Sprintf("part-%s-%s-%s-seq.parquet",
+	filename := fmt.Sprintf("part-%s-%s-%s-seq.arrow",
 		channel, symbol, now.Format("20060102T150405Z"))
 
 	filePath := filepath.Join(s.DirPath, filename)
 	tempFilePath := filePath + ".tmp"
-
-	// Use basic compression options
-	var compressionOpt parquet.WriterOption
-	switch cfg.Storage.Compression {
-	case "zstd":
-		compressionOpt = parquet.Compression(&parquet.Zstd)
-	case "gzip":
-		compressionOpt = parquet.Compression(&parquet.Gzip)
-	case "snappy":
-		compressionOpt = parquet.Compression(&parquet.Snappy)
-	default:
-		compressionOpt = parquet.Compression(&parquet.Zstd)
-	}
 
 	file, err := os.Create(tempFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file %s: %w", tempFilePath, err)
 	}
 
-	var parquetWriter interface{}
+	// Log successful file creation
+	fmt.Printf("Successfully created temp file: %s\n", tempFilePath)
+
+	pool := memory.NewGoAllocator()
+
+	var arrowSchema *arrow.Schema
 	switch channel {
 	case schema.ChannelRawBooks:
-		parquetWriter = parquet.NewGenericWriter[schema.RawBookEvent](file, compressionOpt)
+		arrowSchema = GetRawBookEventSchema()
 	case schema.ChannelBooks:
-		parquetWriter = parquet.NewGenericWriter[schema.BookLevel](file, compressionOpt)
+		arrowSchema = GetBookLevelSchema()
 	case schema.ChannelTrades:
-		parquetWriter = parquet.NewGenericWriter[schema.Trade](file, compressionOpt)
+		arrowSchema = GetTradeSchema()
 	case schema.ChannelTicker:
-		parquetWriter = parquet.NewGenericWriter[schema.Ticker](file, compressionOpt)
+		arrowSchema = GetTickerSchema()
 	default:
 		file.Close()
 		return nil, fmt.Errorf("unsupported channel type: %s", channel)
 	}
 
-	writer := &ChannelWriter{
+	writer, err := ipc.NewFileWriter(file, ipc.WithSchema(arrowSchema))
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to create arrow file writer: %w", err)
+	}
+
+	builder := &RecordBuilder{
+		schema: arrowSchema,
+		pool:   pool,
+	}
+	builder.initBuilders()
+
+	channelWriter := &ChannelWriter{
 		FilePath:     filePath,
 		TempFilePath: tempFilePath,
-		Writer:       parquetWriter,
-		LastFlush:    now,
+		File:         file,
+		Writer:       writer,
+		Schema:       arrowSchema,
+		Builder:      builder,
+		StartTime:    now,
+		Channel:      channel,
+		Symbol:       symbol,
+		IsOpen:       true,
+		Pool:         pool,
 	}
 
 	s.WritersMutex.Lock()
-	s.Writers[writerKey] = writer
+	s.Writers[writerKey] = channelWriter
 	s.WritersMutex.Unlock()
 
-	return writer, nil
+	return channelWriter, nil
 }
 
-func (cw *ChannelWriter) writeRow(data interface{}) error {
-	cw.Mutex.Lock()
-	defer cw.Mutex.Unlock()
-
-	var err error
-	switch v := data.(type) {
-	case *schema.RawBookEvent:
-		if w, ok := cw.Writer.(*parquet.GenericWriter[schema.RawBookEvent]); ok {
-			_, err = w.Write([]schema.RawBookEvent{*v})
-		}
-	case *schema.BookLevel:
-		if w, ok := cw.Writer.(*parquet.GenericWriter[schema.BookLevel]); ok {
-			_, err = w.Write([]schema.BookLevel{*v})
-		}
-	case *schema.Trade:
-		if w, ok := cw.Writer.(*parquet.GenericWriter[schema.Trade]); ok {
-			_, err = w.Write([]schema.Trade{*v})
-		}
-	case *schema.Ticker:
-		if w, ok := cw.Writer.(*parquet.GenericWriter[schema.Ticker]); ok {
-			_, err = w.Write([]schema.Ticker{*v})
-		}
-	default:
-		return fmt.Errorf("unsupported data type: %T", data)
+func (rb *RecordBuilder) initBuilders() {
+	rb.builders = make([]array.Builder, len(rb.schema.Fields()))
+	for i, field := range rb.schema.Fields() {
+		rb.builders[i] = array.NewBuilder(rb.pool, field.Type)
 	}
-
-	if err != nil {
-		return fmt.Errorf("failed to write row: %w", err)
-	}
-
-	cw.RowCount++
-	return nil
-}
-
-func (cw *ChannelWriter) flush() error {
-	cw.Mutex.Lock()
-	defer cw.Mutex.Unlock()
-
-	if cw.Writer != nil {
-		// Type assertion for different writer types
-		switch w := cw.Writer.(type) {
-		case *parquet.GenericWriter[schema.RawBookEvent]:
-			if err := w.Flush(); err != nil {
-				return fmt.Errorf("failed to flush writer: %w", err)
-			}
-		case *parquet.GenericWriter[schema.BookLevel]:
-			if err := w.Flush(); err != nil {
-				return fmt.Errorf("failed to flush writer: %w", err)
-			}
-		case *parquet.GenericWriter[schema.Trade]:
-			if err := w.Flush(); err != nil {
-				return fmt.Errorf("failed to flush writer: %w", err)
-			}
-		case *parquet.GenericWriter[schema.Ticker]:
-			if err := w.Flush(); err != nil {
-				return fmt.Errorf("failed to flush writer: %w", err)
-			}
-		}
-	}
-
-	cw.LastFlush = time.Now()
-	return nil
-}
-
-func (cw *ChannelWriter) close() error {
-	cw.Mutex.Lock()
-	defer cw.Mutex.Unlock()
-
-	if cw.Writer != nil {
-		// Type assertion for different writer types
-		switch w := cw.Writer.(type) {
-		case *parquet.GenericWriter[schema.RawBookEvent]:
-			if err := w.Close(); err != nil {
-				return fmt.Errorf("failed to close writer: %w", err)
-			}
-		case *parquet.GenericWriter[schema.BookLevel]:
-			if err := w.Close(); err != nil {
-				return fmt.Errorf("failed to close writer: %w", err)
-			}
-		case *parquet.GenericWriter[schema.Trade]:
-			if err := w.Close(); err != nil {
-				return fmt.Errorf("failed to close writer: %w", err)
-			}
-		case *parquet.GenericWriter[schema.Ticker]:
-			if err := w.Close(); err != nil {
-				return fmt.Errorf("failed to close writer: %w", err)
-			}
-		}
-		cw.Writer = nil
-	}
-
-	if err := os.Rename(cw.TempFilePath, cw.FilePath); err != nil {
-		return fmt.Errorf("failed to rename temp file: %w", err)
-	}
-
-	return nil
-}
-
-func (w *Writer) closeSegment(segment *Segment) error {
-	segment.Mutex.Lock()
-	defer segment.Mutex.Unlock()
-
-	segment.EndTime = time.Now().UTC()
-	segment.IsOpen = false
-
-	segment.WritersMutex.Lock()
-	for _, writer := range segment.Writers {
-		if err := writer.close(); err != nil {
-			w.logger.Error("Failed to close writer", zap.Error(err))
-		}
-
-		filename := filepath.Base(writer.FilePath)
-		segment.Manifest.Segment.Files = append(segment.Manifest.Segment.Files, filename)
-	}
-	segment.WritersMutex.Unlock()
-
-	segment.Manifest.Segment.UTCEnd = segment.EndTime
-
-	manifestPath := filepath.Join(segment.DirPath, "manifest.json")
-	manifestData, err := json.MarshalIndent(segment.Manifest, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
-	}
-
-	if err := os.WriteFile(manifestPath, manifestData, 0644); err != nil {
-		return fmt.Errorf("failed to write manifest: %w", err)
-	}
-
-	w.logger.Info("Closed segment",
-		zap.String("segment_id", segment.ID),
-		zap.String("channel", string(segment.Channel)),
-		zap.String("symbol", segment.Symbol),
-		zap.Int("file_count", len(segment.Manifest.Segment.Files)),
-		zap.String("manifest_path", manifestPath))
-
-	return nil
 }
 
 func (w *Writer) FlushAll() error {
@@ -454,8 +329,83 @@ func (w *Writer) FlushAll() error {
 			if err := writer.flush(); err != nil {
 				w.logger.Error("Failed to flush writer", zap.Error(err))
 			}
+
+			// Update segment size after each flush and auto-rotate
+			if fi, err := os.Stat(writer.TempFilePath); err == nil {
+				mb := fi.Size() / (1024 * 1024)
+				segment.Mutex.Lock()
+				segment.CurrentSizeMB = mb
+				shouldClose := segment.CurrentSizeMB >= w.segmentSizeMB
+				segment.Mutex.Unlock()
+
+				w.logger.Debug("Updated segment size",
+					zap.String("segment_id", segment.ID),
+					zap.Int64("current_mb", mb),
+					zap.Int64("target_mb", w.segmentSizeMB),
+					zap.Bool("should_close", shouldClose))
+
+				if shouldClose {
+					w.logger.Info("Segment size threshold reached, closing segment",
+						zap.String("segment_id", segment.ID),
+						zap.Int64("size_mb", mb))
+					if err := w.closeSegment(segment); err != nil {
+						w.logger.Error("Failed to close segment", zap.Error(err))
+					}
+				}
+			}
 		}
 	}
+
+	return nil
+}
+
+func (w *Writer) RotateOldSegments(maxAge time.Duration) {
+	w.segmentsMutex.RLock()
+	segmentsToClose := make([]*Segment, 0)
+	now := time.Now()
+
+	for _, segment := range w.segments {
+		segment.Mutex.Lock()
+		age := now.Sub(segment.StartTime)
+		shouldRotate := age > maxAge && segment.IsOpen
+		segment.Mutex.Unlock()
+
+		if shouldRotate {
+			w.logger.Info("Time-based rotation triggered",
+				zap.String("segment_id", segment.ID),
+				zap.Duration("age", age),
+				zap.Duration("max_age", maxAge))
+			segmentsToClose = append(segmentsToClose, segment)
+		}
+	}
+	w.segmentsMutex.RUnlock()
+
+	for _, segment := range segmentsToClose {
+		if err := w.closeSegment(segment); err != nil {
+			w.logger.Error("Failed to close old segment", zap.Error(err))
+		}
+	}
+}
+
+func (w *Writer) closeSegment(segment *Segment) error {
+	segment.Mutex.Lock()
+	defer segment.Mutex.Unlock()
+
+	segment.EndTime = time.Now().UTC()
+	segment.IsOpen = false
+
+	segment.WritersMutex.Lock()
+	for _, writer := range segment.Writers {
+		if err := writer.close(); err != nil {
+			w.logger.Error("Failed to close writer", zap.Error(err))
+		}
+	}
+	segment.WritersMutex.Unlock()
+
+	w.logger.Info("Closed segment",
+		zap.String("segment_id", segment.ID),
+		zap.String("channel", string(segment.Channel)),
+		zap.String("symbol", segment.Symbol))
 
 	return nil
 }
