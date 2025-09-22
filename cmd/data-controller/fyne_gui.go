@@ -18,14 +18,13 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"go.uber.org/zap"
 
 	"github.com/trade-engine/data-controller/internal/config"
+	"github.com/trade-engine/data-controller/internal/gui"
 	"github.com/trade-engine/data-controller/internal/sink/arrow"
 	"github.com/trade-engine/data-controller/internal/ws"
-	"github.com/trade-engine/data-controller/pkg/schema"
 )
 
 type FyneGUIApplication struct {
@@ -48,8 +47,6 @@ type FyneGUIApplication struct {
 	// Fyne Components
 	app               fyne.App
 	window            fyne.Window
-	connectBtn        *widget.Button
-	disconnectBtn     *widget.Button
 	statusLabel       *widget.Label
 	statsText         *widget.Entry
 	filesList         *widget.List
@@ -60,11 +57,8 @@ type FyneGUIApplication struct {
 	statsBinding      binding.String
 	filesData         []string
 
-	// Data stream display
-	dataStreamList    *widget.List
-	streamData        []string
-	streamMutex       sync.Mutex
-	maxStreamEntries  int
+	// Data stream display (using modular component)
+	liveStreamData    *gui.LiveStreamData
 
 	// File viewer state
 	currentFilePath   string
@@ -129,6 +123,9 @@ func (a *FyneGUIApplication) initializeComponents() error {
 	// Initialize router
 	a.router = ws.NewRouter(a.logger)
 
+	// Initialize live stream data component
+	a.liveStreamData = gui.NewLiveStreamData(20)
+
 	// Initialize arrow handler
 	a.arrowHandler = arrow.NewHandler(a.cfg, a.logger)
 
@@ -136,7 +133,7 @@ func (a *FyneGUIApplication) initializeComponents() error {
 	a.arrowReader = arrow.NewFileReader(a.logger)
 
 	// Register data stream callback for live display
-	a.arrowHandler.RegisterDataCallback(a.addStreamData)
+	a.arrowHandler.RegisterDataCallback(a.liveStreamData.AddStreamData)
 
 	// Set router handler
 	a.router.SetHandler(a.arrowHandler)
@@ -150,10 +147,6 @@ func (a *FyneGUIApplication) initializeComponents() error {
 
 	a.statsBinding = binding.NewString()
 	a.statsBinding.Set("Statistics:\nTickers: 0\nTrades: 0\nBook Levels: 0\nErrors: 0")
-
-	// Initialize stream data
-	a.maxStreamEntries = 20
-	a.streamData = make([]string, 0, a.maxStreamEntries)
 
 	// Initialize file viewer state
 	a.pageSize = 100 // Default page size
@@ -174,12 +167,6 @@ func (a *FyneGUIApplication) createGUI() {
 	a.window.Resize(fyne.NewSize(float32(a.cfg.GUI.Width), float32(a.cfg.GUI.Height)))
 
 	// Create connection control buttons
-	a.connectBtn = widget.NewButton("🔌 Connect WebSocket", a.handleConnect)
-	a.connectBtn.Importance = widget.HighImportance
-
-	a.disconnectBtn = widget.NewButton("⏹️ Disconnect WebSocket", a.handleDisconnect)
-	a.disconnectBtn.Importance = widget.MediumImportance
-	a.disconnectBtn.Disable()
 
 	// Create status displays with data binding
 	a.statusLabel = widget.NewLabelWithData(a.statusBinding)
@@ -244,17 +231,6 @@ func (a *FyneGUIApplication) createGUI() {
 	a.nextBtn.Disable()
 	a.closeBtn.Disable()
 
-	// Create data stream display
-	a.dataStreamList = widget.NewList(
-		func() int { return len(a.streamData) },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			if id < len(a.streamData) {
-				label := obj.(*widget.Label)
-				label.SetText(a.streamData[id])
-			}
-		},
-	)
 
 	// Create layout
 	a.createLayout()
@@ -271,126 +247,75 @@ func (a *FyneGUIApplication) createGUI() {
 }
 
 func (a *FyneGUIApplication) createLayout() {
-	// Top toolbar with connection controls
-	connectionControls := container.NewHBox(
-		a.connectBtn,
-		a.disconnectBtn,
-		widget.NewSeparator(),
-		widget.NewLabel("Status:"),
-		a.statusLabel,
+	// Top bar - status only (using modular component)
+	topBar := gui.CreateTopBar(a.statusBinding)
+
+	// New Exchange Panes (WebSocket + REST API) - replaces statsCard
+	exchangePanes := gui.BuildExchangePanesWithHandlers(
+		func(connected bool) {
+			if connected {
+				a.handleConnect()
+			} else {
+				a.handleDisconnect()
+			}
+		},
+		func(connected bool) {
+			// REST API handler - TODO: implement REST API functionality
+			if connected {
+				fmt.Println("REST API Connect requested")
+			} else {
+				fmt.Println("REST API Disconnect requested")
+			}
+		},
 	)
 
-	// Left panel: Statistics
-	statsCard := widget.NewCard("📊 Statistics", "", a.statsText)
-
-	// Right panel: File browser and viewer
-	// Create date picker buttons for easier date selection
-	startDatePickerBtn := widget.NewButton("📅", func() {
-		a.showDatePicker("Start Date", a.startDateEntry)
-	})
-	startDatePickerBtn.Resize(fyne.NewSize(30, 30))
-
-	endDatePickerBtn := widget.NewButton("📅", func() {
-		a.showDatePicker("End Date", a.endDateEntry)
-	})
-	endDatePickerBtn.Resize(fyne.NewSize(30, 30))
-
-	// Create GridWrapLayout containers to guarantee minimum width for date entries
-	startEntryWrap := container.New(layout.NewGridWrapLayout(fyne.NewSize(140, 32)), a.startDateEntry)
-	endEntryWrap := container.New(layout.NewGridWrapLayout(fyne.NewSize(140, 32)), a.endDateEntry)
-
-	// Create filter controls layout with better spacing and picker buttons
-	dateControls := container.NewHBox(
-		widget.NewLabel("Start Date:"),
-		startEntryWrap,
-		startDatePickerBtn,
-		widget.NewSeparator(),
-		widget.NewLabel("End Date:"),
-		endEntryWrap,
-		endDatePickerBtn,
-	)
-
-	filterTypeControls := container.NewHBox(
-		widget.NewLabel("Channel:"),
+	// Right panel: File browser and viewer (using modular components)
+	// Data Files panel
+	filesCard := gui.CreateDataFilesPanel(
+		a.filesList,
+		a.startDateEntry,
+		a.endDateEntry,
 		a.channelSelect,
-		widget.NewSeparator(),
-		widget.NewLabel("Symbol:"),
 		a.symbolSelect,
-	)
-
-	actionControls := container.NewHBox(
 		a.filterBtn,
 		a.showAllBtn,
 		a.loadContentBtn,
+		a.showDatePicker,
 	)
 
-	filterControls := container.NewVBox(
-		dateControls,
-		filterTypeControls,
-		actionControls,
-		widget.NewSeparator(),
-	)
-
-	// Files list with filter controls - use Border layout for proper expansion
-	filesListScroll := container.NewVScroll(a.filesList)
-	filesContent := container.NewBorder(
-		filterControls, // top
-		nil,            // bottom
-		nil,            // left
-		nil,            // right
-		filesListScroll,// center (takes remaining space)
-	)
-	filesCard := widget.NewCard("📁 Data Files", "", filesContent)
-
-	// File viewer with controls - use Border layout for proper expansion
-	viewerControls := container.NewHBox(
+	// File Viewer panel
+	viewerCard := gui.CreateFileViewerPanel(
+		a.fileViewer,
 		a.prevBtn,
 		a.nextBtn,
-		widget.NewSeparator(),
-		a.pageLabel,
-		widget.NewSeparator(),
 		a.closeBtn,
+		a.pageLabel,
 	)
-	viewerScroll := container.NewVScroll(a.fileViewer)
-	viewerContent := container.NewBorder(
-		viewerControls, // top
-		nil,            // bottom
-		nil,            // left
-		nil,            // right
-		viewerScroll,   // center (takes remaining space)
-	)
-	viewerCard := widget.NewCard("👁️ File Viewer", "", viewerContent)
 
 	rightPanel := container.NewVSplit(filesCard, viewerCard)
 	rightPanel.SetOffset(0.3) // 30% files, 70% viewer (more space for viewer)
 
 	// Main content area
-	mainContent := container.NewHSplit(statsCard, rightPanel)
-	mainContent.SetOffset(0.3) // 30% stats, 70% files
+	mainContent := container.NewHSplit(exchangePanes, rightPanel)
+	mainContent.SetOffset(0.5) // 50% exchange panes, 50% files
 
-	// Data stream area (bottom panel)
-	streamCard := widget.NewCard("📡 Live Data Stream (Latest 20)", "", a.dataStreamList)
+	// Data stream area (bottom panel) - using modular component
+	streamCard := gui.CreateLiveStreamPanel(a.liveStreamData)
 	streamCard.Resize(fyne.NewSize(800, 150)) // Fixed height for stream
 
-	// Status bar
-	statusBar := container.NewHBox(
-		widget.NewLabel("🎯 Symbols:"),
-		widget.NewLabel(strings.Join(a.cfg.Symbols, ", ")),
-		widget.NewSeparator(),
-		widget.NewLabel("💾 Storage:"),
-		widget.NewLabel(filepath.Base(a.cfg.Storage.BasePath)),
-	)
+	// Bottom bar - symbols and storage only (using modular component)
+	bottomBar := gui.CreateBottomBar(a.cfg.Symbols, a.cfg.Storage.BasePath)
 
-	// Bottom section with stream and status
-	bottomSection := container.NewVBox(streamCard, statusBar)
+	// Bottom section with stream and bottom bar
+	bottomSection := container.NewVBox(streamCard, bottomBar)
 
 	// Complete layout using Border container
 	content := container.NewBorder(
-		connectionControls, // top
-		bottomSection,      // bottom
-		nil,                // left
-		nil,                // right
-		mainContent,        // center
+		topBar,         // top
+		bottomSection,  // bottom
+		nil,            // left
+		nil,            // right
+		mainContent,    // center
 	)
 
 	a.window.SetContent(content)
@@ -404,8 +329,6 @@ func (a *FyneGUIApplication) handleConnect() {
 		return
 	}
 
-	a.connectBtn.Disable()
-	a.disconnectBtn.Enable()
 	a.statusBinding.Set("🟢 Connected & Collecting Data")
 
 	dialog.ShowInformation("Success", "✅ WebSocket connection started!\nCollecting data from: "+strings.Join(a.cfg.Symbols, ", "), a.window)
@@ -419,8 +342,6 @@ func (a *FyneGUIApplication) handleDisconnect() {
 		return
 	}
 
-	a.connectBtn.Enable()
-	a.disconnectBtn.Disable()
 	a.statusBinding.Set("🔴 Disconnected")
 
 	// Update file list after disconnection
@@ -836,66 +757,6 @@ func (a *FyneGUIApplication) getDataFiles() []string {
 	return files
 }
 
-func (a *FyneGUIApplication) addStreamData(dataType, symbol string, data interface{}) {
-	a.streamMutex.Lock()
-	defer a.streamMutex.Unlock()
-
-	timestamp := time.Now().Format("15:04:05.000")
-	var message string
-
-	switch dataType {
-	case "ticker":
-		if ticker, ok := data.(*schema.Ticker); ok {
-			message = fmt.Sprintf("[%s] 📈 %s: Bid=%.2f Ask=%.2f", timestamp, symbol, ticker.Bid, ticker.Ask)
-		}
-	case "trade":
-		if trade, ok := data.(*schema.Trade); ok {
-			side := "BUY"
-			if trade.Amount < 0 {
-				side = "SELL"
-			}
-			message = fmt.Sprintf("[%s] 💰 %s: %s %.6f @ %.2f", timestamp, symbol, side, abs(trade.Amount), trade.Price)
-		}
-	case "book":
-		if book, ok := data.(*schema.BookLevel); ok {
-			side := "BID"
-			if book.Side == schema.SideAsk {
-				side = "ASK"
-			}
-			message = fmt.Sprintf("[%s] 📚 %s: %s %.2f (%.4f)", timestamp, symbol, side, book.Price, book.Amount)
-		}
-	case "raw_book":
-		if rawBook, ok := data.(*schema.RawBookEvent); ok {
-			action := "UPDATE"
-			if rawBook.Amount == 0 {
-				action = "DELETE"
-			}
-			message = fmt.Sprintf("[%s] 📝 %s: %s %.2f", timestamp, symbol, action, rawBook.Price)
-		}
-	default:
-		message = fmt.Sprintf("[%s] 📡 %s: %s", timestamp, symbol, dataType)
-	}
-
-	// Add to beginning of slice
-	a.streamData = append([]string{message}, a.streamData...)
-
-	// Keep only the latest entries
-	if len(a.streamData) > a.maxStreamEntries {
-		a.streamData = a.streamData[:a.maxStreamEntries]
-	}
-
-	// Update UI on main thread
-	fyne.Do(func() {
-		a.dataStreamList.Refresh()
-	})
-}
-
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
 
 func (a *FyneGUIApplication) Run() {
 	a.window.ShowAndRun()

@@ -3,6 +3,10 @@ application:
   name: "data-controller"
   version: "1.0.0"
   log_level: "debug" # debug, info, warn, error
+  # Add runtime controls for ops
+  hot_reload: true            # enable SIGHUP-triggered reload of config
+  sighup_watch: true          # whether process should listen for SIGHUP
+  pid_file: "/var/run/data-controller.pid" # optional pid file for launchd/system
 
 # WebSocket connection settings
 websocket:
@@ -12,9 +16,6 @@ websocket:
   ping_interval: "30s"
   max_connections: 5
   connection_timeout: "10s"
-
-  # Bitfinex configuration flags (合算値: 537100288)
-  # TIMESTAMP(32768) + SEQ_ALL(65536) + OB_CHECKSUM(131072) + BULK_UPDATES(536870912)
   conf_flags: 537100288
 
 # Symbols to subscribe to
@@ -50,18 +51,18 @@ storage:
   segment_size_mb: 256 # Create new folder every 256MB
   compression: "zstd" # zstd, gzip, snappy
   compression_level: 3
-
-  # Parquet writer settings
   parquet:
     row_group_size_mb: 64
     flush_interval: "5s"
     flush_row_count: 10000
-
-  # WAL (Write-Ahead Log) settings - for audit and recovery
   wal:
     enabled: true
     compression: "zstd"
     retention_hours: 24
+  # convenience derived paths (implementation may use these)
+  paths:
+    parquet_path: "${storage.base_path}/parquet"
+    wal_path: "${storage.base_path}/wal"
 
 # Metadata and schema settings
 metadata:
@@ -76,16 +77,30 @@ monitoring:
     enabled: true
     port: 9090
     path: "/metrics"
-
   health_check:
     enabled: true
     port: 8080
     path: "/health"
-
   logging:
-    format: "json" # json, text
-    output: "stdout" # stdout, file
+    format: "json"
+    output: "stdout"
     file_path: "/var/log/data-controller.log"
+
+  # InfluxDB (Docker recommended) guidance for operators
+  influx:
+    enabled: true
+    docker_recommended: true
+    bind_address: "127.0.0.1:8086"
+    named_volume: "influxdb_data"    # use named volume, avoid host bind on macOS
+    backup_bind_mount: "/host/backups/influx" # optional backup mount on host
+    restart_policy: "unless-stopped"
+    buckets:
+      - name: "rt-fast"
+        retention_days: 7
+      - name: "agg-30s"
+        retention_days: 30
+      - name: "logs"
+        retention_days: 90
 
 # GUI settings
 gui:
@@ -103,12 +118,25 @@ performance:
   worker_count: 4
   max_memory_mb: 2048
   gc_interval: "30s"
-
-  # Circuit breaker settings
   circuit_breaker:
     enabled: true
     failure_threshold: 5
     reset_timeout: "30s"
+
+# New validation and env-override helpers
+validation:
+  config_schema_version: 1
+  validate_on_start: true     # fail fast if config invalid
+  fail_on_invalid: true
+  schema_path: "config/schema.json" # implementation should load & validate against this
+
+env_overrides:
+  enabled: true
+  mappings:
+    WEBSOCKET_URL: websocket.url
+    STORAGE_BASE_PATH: storage.base_path
+    LOG_LEVEL: application.log_level
+    PROM_PORT: monitoring.prometheus.port
 
 # Development and debugging
 debug:

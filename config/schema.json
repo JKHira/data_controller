@@ -1,0 +1,141 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Data Controller Config",
+    "type": "object",
+    "required": [
+        "application",
+        "websocket",
+        "storage",
+        "monitoring"
+    ],
+    "properties": {
+        "application": {
+            "type": "object",
+            "required": [
+                "name",
+                "version",
+                "log_level"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "log_level": {
+                    "type": "string",
+                    "enum": [
+                        "debug",
+                        "info",
+                        "warn",
+                        "error"
+                    ]
+                }
+            },
+            "additionalProperties": true
+        },
+        "websocket": {
+            "type": "object",
+            "required": [
+                "url"
+            ],
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "format": "uri"
+                },
+                "reconnect_interval": {
+                    "type": "string"
+                },
+                "heartbeat_timeout": {
+                    "type": "string"
+                },
+                "max_connections": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            },
+            "additionalProperties": true
+        },
+        "symbols": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "channels": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "object"
+                },
+                "trades": {
+                    "type": "object"
+                },
+                "books": {
+                    "type": "object"
+                },
+                "raw_books": {
+                    "type": "object"
+                }
+            },
+            "additionalProperties": true
+        },
+        "storage": {
+            "type": "object",
+            "required": [
+                "base_path"
+            ],
+            "properties": {
+                "base_path": {
+                    "type": "string"
+                },
+                "segment_size_mb": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "compression": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": true
+        },
+        "monitoring": {
+            "type": "object",
+            "required": [
+                "prometheus"
+            ],
+            "properties": {
+                "prometheus": {
+                    "type": "object",
+                    "required": [
+                        "enabled",
+                        "port"
+                    ],
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "port": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                        },
+                        "path": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "additionalProperties": true
+        },
+        "performance": {
+            "type": "object"
+        },
+        "debug": {
+            "type": "object"
+        }
+    },
+    "additionalProperties": true
+}
