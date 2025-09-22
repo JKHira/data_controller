@@ -19,7 +19,7 @@ websocket:
 
 # Symbols to subscribe to
 symbols:
-  - "tBTCUSDT"
+  - "tBTCUSD"
   #- "tETHUSD"
 
 # Channel subscriptions configuration

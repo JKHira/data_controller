@@ -80,7 +80,7 @@ func NewWriter(cfg *config.Config, logger *zap.Logger) *Writer {
 func (w *Writer) WriteRawBookEvent(event *schema.RawBookEvent) error {
 	event.IngestID = w.ingestID
 	event.SourceFile = "websocket"
-	event.TsMicros = time.Now().UnixMicro()
+	event.RecvTS = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelRawBooks, event.Symbol)
 	if err != nil {
@@ -98,7 +98,7 @@ func (w *Writer) WriteRawBookEvent(event *schema.RawBookEvent) error {
 func (w *Writer) WriteBookLevel(level *schema.BookLevel) error {
 	level.IngestID = w.ingestID
 	level.SourceFile = "websocket"
-	level.TsMicros = time.Now().UnixMicro()
+	level.RecvTS = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelBooks, level.Symbol)
 	if err != nil {
@@ -116,7 +116,7 @@ func (w *Writer) WriteBookLevel(level *schema.BookLevel) error {
 func (w *Writer) WriteTrade(trade *schema.Trade) error {
 	trade.IngestID = w.ingestID
 	trade.SourceFile = "websocket"
-	trade.TsMicros = time.Now().UnixMicro()
+	trade.RecvTS = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelTrades, trade.Symbol)
 	if err != nil {
@@ -134,7 +134,7 @@ func (w *Writer) WriteTrade(trade *schema.Trade) error {
 func (w *Writer) WriteTicker(ticker *schema.Ticker) error {
 	ticker.IngestID = w.ingestID
 	ticker.SourceFile = "websocket"
-	ticker.TsMicros = time.Now().UnixMicro()
+	ticker.RecvTS = time.Now().UnixMicro()
 
 	segment, err := w.getOrCreateSegment(schema.ChannelTicker, ticker.Symbol)
 	if err != nil {
