@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+	"go.uber.org/zap"
 )
 
 // ToggleButton: シンプルなトグル風ボタン（背景色とテキストを切替）
@@ -97,11 +98,11 @@ func (tb *ToggleButton) Set(connected bool) {
 // BuildExchangePanes constructs the two side-by-side panes (Websocket / REST API)
 // Returns a fyne.CanvasObject to be embedded into the main window.
 func BuildExchangePanes() fyne.CanvasObject {
-	return BuildExchangePanesWithHandlers(nil, nil)
+	return BuildExchangePanesWithHandlers(nil, nil, nil)
 }
 
 // BuildExchangePanesWithHandlers constructs the exchange panes with custom connection handlers
-func BuildExchangePanesWithHandlers(wsHandler, restHandler func(bool)) fyne.CanvasObject {
+func BuildExchangePanesWithHandlers(wsHandler, restHandler func(bool), logger interface{}) fyne.CanvasObject {
 	// Colors: disconnected = 柿色, connected = パントーングリーン
 	orange := color.RGBA{R: 161, G: 93, B: 55, A: 255} // disconnected
 	green := color.RGBA{R: 65, G: 204, B: 102, A: 255}  // connected
@@ -152,8 +153,30 @@ func BuildExchangePanesWithHandlers(wsHandler, restHandler func(bool)) fyne.Canv
 		}
 	}
 
+	// Create REST API panel if logger is provided
+	var restAPIPanel *RestAPIPanel
+	if logger != nil {
+		if zapLogger, ok := logger.(*zap.Logger); ok {
+			restAPIPanel = NewRestAPIPanel(zapLogger)
+		}
+	}
+
+	// Create nested tabs for REST API functionality
+	var bitfinexContent fyne.CanvasObject
+	if restAPIPanel != nil {
+		// Nested tabs for Get Base Data and Get Index Data
+		baseDataTab := container.NewTabItem("Get Base Data", restAPIPanel.CreateBitfinexBaseDataPanel())
+		indexDataTab := container.NewTabItem("Get Index Data", widget.NewLabel("Index data functionality - coming soon"))
+
+		nestedTabs := container.NewAppTabs(baseDataTab, indexDataTab)
+		nestedTabs.SetTabLocation(container.TabLocationTop)
+		bitfinexContent = nestedTabs
+	} else {
+		bitfinexContent = widget.NewLabel("Bitfinex REST settings")
+	}
+
 	restTabs := container.NewAppTabs(
-		container.NewTabItem("Bitfinex", widget.NewLabel("Bitfinex REST settings")),
+		container.NewTabItem("Bitfinex", bitfinexContent),
 		container.NewTabItem("Binance", widget.NewLabel("設定をここに追加")),
 		container.NewTabItem("Coinbase", widget.NewLabel("設定をここに追加")),
 		container.NewTabItem("Kraken", widget.NewLabel("設定をここに追加")),

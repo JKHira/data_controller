@@ -74,8 +74,8 @@ func DisplayArrowData(fileViewer *widget.Entry, filePath string, summary map[str
 	content += fmt.Sprintf("💾 Bytes loaded: %.2f MB\n", float64(pageData.BytesRead)/(1024*1024))
 	content += strings.Repeat("─", 80) + "\n\n"
 
-	// Display records (limit to first 50 for readability)
-	maxRecords := min(50, len(pageData.Records))
+	// Display records (limit to first 3000 for pagination)
+	maxRecords := min(3000, len(pageData.Records))
 	for i := 0; i < maxRecords; i++ {
 		record := pageData.Records[i]
 		content += fmt.Sprintf("🔢 Record #%d:\n", i+1)
@@ -119,8 +119,8 @@ func DisplayArrowData(fileViewer *widget.Entry, filePath string, summary map[str
 		content += "\n"
 	}
 
-	if len(pageData.Records) > 50 {
-		content += fmt.Sprintf("... and %d more records in this chunk\n", len(pageData.Records)-50)
+	if len(pageData.Records) > 3000 {
+		content += fmt.Sprintf("... and %d more records in this chunk\n", len(pageData.Records)-3000)
 		content += "💡 Use Previous/Next buttons to navigate through data\n"
 	}
 

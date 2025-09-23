@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +54,7 @@ type FyneGUIApplication struct {
 	// Data Bindings
 	statusBinding     binding.String
 	statsBinding      binding.String
-	filesData         []string
+	filesData         []arrow.FileInfo
 
 	// Data stream display (using modular component)
 	liveStreamData    *gui.LiveStreamData
@@ -149,7 +148,7 @@ func (a *FyneGUIApplication) initializeComponents() error {
 	a.statsBinding.Set("Statistics:\nTickers: 0\nTrades: 0\nBook Levels: 0\nErrors: 0")
 
 	// Initialize file viewer state
-	a.pageSize = 100 // Default page size
+	a.pageSize = 3000 // Default page size - 3000 records per page
 	a.currentPage = 1
 	a.selectedFileIndex = -1 // No selection initially
 
@@ -204,11 +203,35 @@ func (a *FyneGUIApplication) createGUI() {
 	// Create file browser
 	a.filesList = widget.NewList(
 		func() int { return len(a.filesData) },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
+		func() fyne.CanvasObject {
+			// Create a container with main label and sub label for metadata
+			main := widget.NewLabel("filename")
+			sub := widget.NewLabel("meta")
+			sub.TextStyle.Italic = true
+			return container.NewVBox(main, sub)
+		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id < len(a.filesData) {
-				label := obj.(*widget.Label)
-				label.SetText(filepath.Base(a.filesData[id]))
+				item := a.filesData[id]
+				box := obj.(*fyne.Container)
+				main := box.Objects[0].(*widget.Label)
+				sub := box.Objects[1].(*widget.Label)
+
+				// Set filename
+				main.SetText(filepath.Base(item.Path))
+
+				// Build metadata string
+				meta := item.Exchange
+				if item.Channel != "" {
+					meta += " · " + item.Channel
+				}
+				if item.SourceType != "" {
+					meta += " · " + string(item.SourceType)
+				}
+				if item.Category != "" {
+					meta += " · " + item.Category
+				}
+				sub.SetText(meta)
 			}
 		},
 	)
@@ -267,6 +290,7 @@ func (a *FyneGUIApplication) createLayout() {
 				fmt.Println("REST API Disconnect requested")
 			}
 		},
+		a.logger, // Pass logger for REST API functionality
 	)
 
 	// Right panel: File browser and viewer (using modular components)
@@ -358,23 +382,38 @@ func (a *FyneGUIApplication) handleFileSelection(id widget.ListItemID) {
 	// Track selected file index
 	a.selectedFileIndex = int(id)
 
-	filePath := a.filesData[id]
-	a.logger.Info("GUI: File selected (single click)", zap.String("file", filePath))
+	fileInfo := a.filesData[id]
+	a.logger.Info("GUI: File selected (single click)", zap.String("file", fileInfo.Path))
 
 	// For single click, just show file info
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(fileInfo.Path)
 	if err != nil {
 		a.fileViewer.SetText(fmt.Sprintf("❌ Error reading file: %v", err))
 		return
 	}
 
-	content := fmt.Sprintf("📄 File: %s\n", filepath.Base(filePath))
-	content += fmt.Sprintf("📁 Path: %s\n", filePath)
+	content := fmt.Sprintf("📄 File: %s\n", filepath.Base(fileInfo.Path))
+	content += fmt.Sprintf("📁 Path: %s\n", fileInfo.Path)
 	content += fmt.Sprintf("📏 Size: %d bytes (%.2f MB)\n", info.Size(), float64(info.Size())/(1024*1024))
 	content += fmt.Sprintf("🕒 Modified: %s\n", info.ModTime().Format(time.RFC3339))
-	content += fmt.Sprintf("🏷️ Type: %s\n\n", filepath.Ext(filePath))
+	content += fmt.Sprintf("🏷️ Type: %s\n\n", filepath.Ext(fileInfo.Path))
 
-	if strings.HasSuffix(filePath, ".arrow") {
+	// Add metadata info
+	if fileInfo.Exchange != "" {
+		content += fmt.Sprintf("🏦 Exchange: %s\n", fileInfo.Exchange)
+	}
+	if fileInfo.Channel != "" {
+		content += fmt.Sprintf("📡 Channel: %s\n", fileInfo.Channel)
+	}
+	if fileInfo.SourceType != "" {
+		content += fmt.Sprintf("🔄 Source: %s\n", string(fileInfo.SourceType))
+	}
+	if fileInfo.Category != "" {
+		content += fmt.Sprintf("📂 Category: %s\n", fileInfo.Category)
+	}
+	content += "\n"
+
+	if strings.HasSuffix(fileInfo.Path, ".arrow") {
 		content += "📊 This is an Arrow file containing trading data.\n"
 		content += "💡 Double-click to view contents (10MB chunks)\n"
 		content += "🔍 File contains structured data with timestamps, prices, and volumes.\n"
@@ -386,18 +425,23 @@ func (a *FyneGUIApplication) handleFileSelection(id widget.ListItemID) {
 }
 
 // New handler for double-click functionality
-func (a *FyneGUIApplication) handleFileDoubleClick(filePath string) {
-	a.logger.Info("GUI: File double-clicked", zap.String("file", filePath))
+func (a *FyneGUIApplication) handleFileDoubleClick(fileInfo arrow.FileInfo) {
+	a.logger.Info("GUI: File double-clicked", zap.String("file", fileInfo.Path))
 
 	// Set current file and reset page
-	a.currentFilePath = filePath
+	a.currentFilePath = fileInfo.Path
 	a.currentPage = 1
 
-	if strings.HasSuffix(filePath, ".arrow") {
+	// Decide how to view based on metadata and file extension
+	ext := strings.ToLower(filepath.Ext(fileInfo.Path))
+	if ext == ".arrow" || ext == ".parquet" {
+		// Allow arrow reader to handle multiple channel/schema types
 		a.loadArrowFileData()
-	} else {
-		a.displayFileInfo()
+		return
 	}
+
+	// Fallback: show file info if unsupported
+	a.displayFileInfo()
 }
 
 func (a *FyneGUIApplication) handleFilterFiles() {
@@ -430,10 +474,7 @@ func (a *FyneGUIApplication) handleFilterFiles() {
 	a.filteredFiles = filteredFiles
 
 	// Update files list with filtered results
-	a.filesData = make([]string, len(filteredFiles))
-	for i, fileInfo := range filteredFiles {
-		a.filesData[i] = fileInfo.Path
-	}
+	a.filesData = filteredFiles
 
 	a.filesList.Refresh()
 
@@ -459,8 +500,8 @@ func (a *FyneGUIApplication) handleLoadContent() {
 		return
 	}
 
-	filePath := a.filesData[a.selectedFileIndex]
-	a.handleFileDoubleClick(filePath)
+	fileInfo := a.filesData[a.selectedFileIndex]
+	a.handleFileDoubleClick(fileInfo)
 }
 
 func (a *FyneGUIApplication) displayFileInfo() {
@@ -535,8 +576,8 @@ func (a *FyneGUIApplication) displayArrowData(summary map[string]interface{}, pa
 	content += fmt.Sprintf("💾 Bytes loaded: %.2f MB\n", float64(pageData.BytesRead)/(1024*1024))
 	content += strings.Repeat("─", 80) + "\n\n"
 
-	// Display records (limit to first 50 for readability)
-	maxRecords := min(50, len(pageData.Records))
+	// Display records (show up to the requested page size)
+	maxRecords := min(a.pageSize, len(pageData.Records))
 	for i := 0; i < maxRecords; i++ {
 		record := pageData.Records[i]
 		content += fmt.Sprintf("🔢 Record #%d:\n", i+1)
@@ -580,8 +621,8 @@ func (a *FyneGUIApplication) displayArrowData(summary map[string]interface{}, pa
 		content += "\n"
 	}
 
-	if len(pageData.Records) > 50 {
-		content += fmt.Sprintf("... and %d more records in this chunk\n", len(pageData.Records)-50)
+	if len(pageData.Records) > maxRecords {
+		content += fmt.Sprintf("... and %d more records in this chunk\n", len(pageData.Records) - maxRecords)
 		content += "💡 Use Previous/Next buttons to navigate through data\n"
 	}
 
@@ -730,28 +771,17 @@ func (a *FyneGUIApplication) updateFileList() {
 	a.filesList.Refresh()
 }
 
-func (a *FyneGUIApplication) getDataFiles() []string {
-	var files []string
-
+func (a *FyneGUIApplication) getDataFiles() []arrow.FileInfo {
 	dataPath := a.cfg.Storage.BasePath
 	if _, err := os.Stat(dataPath); os.IsNotExist(err) {
-		return files
+		return make([]arrow.FileInfo, 0)
 	}
 
-	err := filepath.WalkDir(dataPath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // Continue walking
-		}
-
-		if !d.IsDir() && strings.HasSuffix(path, ".arrow") {
-			files = append(files, path)
-		}
-
-		return nil
-	})
-
+	// Use arrowReader.ScanDataFiles to get metadata-enriched list
+	files, err := a.arrowReader.ScanDataFiles(dataPath)
 	if err != nil {
-		a.logger.Error("Failed to walk data directory", zap.Error(err))
+		a.logger.Error("Failed to scan data files", zap.Error(err))
+		return make([]arrow.FileInfo, 0)
 	}
 
 	return files
