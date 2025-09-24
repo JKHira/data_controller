@@ -1,6 +1,6 @@
 module github.com/trade-engine/data-controller
 
-go 1.21
+go 1.24.0
 
 require (
 	fyne.io/fyne/v2 v2.6.3
@@ -9,6 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/xeipuuv/gojsonschema v1.2.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/time v0.13.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

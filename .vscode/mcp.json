@@ -1,0 +1,112 @@
+{
+    // 入力プロンプトで API キーを安全に注入したい場合の例
+    "inputs": [
+        {
+            "type": "promptString",
+            "id": "GITHUB_PAT",
+            "description": "GitHub Personal Access Token",
+            "password": true
+        },
+        {
+            "type": "promptString",
+            "id": "GRAFANA_TOKEN",
+            "description": "Grafana Service Account Token",
+            "password": true
+        },
+        {
+            "type": "promptString",
+            "id": "INFLUX_TOKEN",
+            "description": "InfluxDB Token",
+            "password": true
+        }
+    ],
+    "servers": {
+        // GitHub MCP（公式）
+        "github": {
+            "type": "stdio",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-github"
+            ],
+            "env": {
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "${input:GITHUB_PAT}"
+            }
+        },
+        // Grafana MCP（Docker で stdio 強制）
+        "grafana": {
+            "type": "stdio",
+            "command": "docker",
+            "args": [
+                "run",
+                "--rm",
+                "-i",
+                "-e",
+                "GRAFANA_URL",
+                "-e",
+                "GRAFANA_SERVICE_ACCOUNT_TOKEN",
+                "mcp/grafana",
+                "-t",
+                "stdio" // 重要: 既定のSSEをstdioに上書き
+            ],
+            "env": {
+                "GRAFANA_URL": "https://your.grafana.net",
+                "GRAFANA_SERVICE_ACCOUNT_TOKEN": "${input:GRAFANA_TOKEN}"
+            }
+        },
+        // InfluxDB 3 MCP（Docker 例）
+        "influxdb3": {
+            "type": "stdio",
+            "command": "docker",
+            "args": [
+                "run",
+                "--rm",
+                "-i",
+                "-e",
+                "INFLUX_DB_INSTANCE_URL",
+                "-e",
+                "INFLUX_DB_TOKEN",
+                "-e",
+                "INFLUX_DB_PRODUCT_TYPE",
+                "mcp/influxdb"
+            ],
+            "env": {
+                "INFLUX_DB_INSTANCE_URL": "http://host.docker.internal:8181/",
+                "INFLUX_DB_TOKEN": "${input:INFLUX_TOKEN}",
+                "INFLUX_DB_PRODUCT_TYPE": "core"
+            }
+        },
+        // gopls を MCP 化（コミュニティ実装）
+        "mcp-gopls": {
+            "type": "stdio",
+            "command": "mcp-gopls"
+        },
+        // Sourcegraph コード検索 MCP（コミュニティ）
+        "sourcegraph": {
+            "type": "sse",
+            "url": "http://localhost:8000/sse" // サーバの起動方法に応じて変更
+        },
+        // Context7（最新版ドキュメント注入）
+        "context7": {
+            "type": "stdio",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@upstash/context7-mcp@latest"
+            ]
+        },
+        // OpenAPI MCP（AWS Labs）
+        "openapi": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "awslabs.openapi-mcp-server@latest"
+            ],
+            "env": {
+                "API_NAME": "My API",
+                "API_BASE_URL": "https://api.example.com",
+                "API_SPEC_URL": "https://api.example.com/openapi.json"
+            }
+        }
+    }
+}

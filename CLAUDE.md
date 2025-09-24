@@ -202,45 +202,118 @@ type KillSwitch struct {
 - **システム停止**: データ収集・計算の安全な停止
 - **通知**: アラート送信（GUI・ログ・外部通知）
 
-## 📁 プロジェクト構造の拡張
+## 📁 プロジェクト構造の現状と拡張
 
+### 現在の実装済み構造
 ```
 data_controller/
+├── cmd/data-controller/          # エントリーポイント
+│   ├── main.go                  # メイン起動ロジック
+│   ├── fyne_gui.go              # GUI初期化（モジュラー化済み）
+│   ├── gui.go                   # GUI有効化フラグ
+│   ├── gui_stub.go              # ビルドタグ用GUIスタブ
+│   └── nogui.go                 # CLI実行ロジック
+│
 ├── internal/
-│   ├── features/              # 特徴生成エンジン
+│   ├── config/                  # 設定管理
+│   │   ├── config.go           # 設定構造体定義
+│   │   └── loader.go           # YAML設定読み込み
+│   │
+│   ├── domain/                  # ドメイン層（新規追加）
+│   │   ├── file_item.go        # ファイル項目ドメインモデル
+│   │   └── scan_params.go      # スキャンパラメーター定義
+│   │
+│   ├── gui/                    # GUI システム（モジュラー化完了）
+│   │   ├── app/                # アプリケーション層
+│   │   │   └── app.go          # メインアプリケーション構造
+│   │   ├── controllers/        # コントローラー層
+│   │   │   └── file_controller.go  # ファイル操作ロジック（domain対応済み）
+│   │   ├── panels/             # プレゼンテーション層
+│   │   │   ├── files_panel.go  # 高機能ファイル一覧パネル（フィルター・非同期スキャン対応）
+│   │   │   └── viewer_panel.go # ファイルビューアーパネル
+│   │   ├── state/              # 状態管理
+│   │   │   └── app_state.go    # アプリケーション状態（domain.FileItem対応）
+│   │   ├── file_viewer.go      # ファイル表示共通機能
+│   │   ├── panes.go            # ペイン構成
+│   │   ├── rest_api_panel.go   # REST API操作パネル
+│   │   ├── top_bar.go          # 上部バー
+│   │   ├── bottom_bar.go       # 下部ステータスバー
+│   │   ├── data_files.go       # データファイルパネル
+│   │   └── live_stream.go      # リアルタイム表示
+│   │
+│   ├── restapi/                # REST API クライアント
+│   │   ├── bitfinex_client.go  # Bitfinex API実装
+│   │   ├── arrow_storage.go    # Arrowストレージ（restapi対応）
+│   │   └── utils.go            # ユーティリティ関数
+│   │
+│   ├── sink/arrow/             # データ保存エンジン
+│   │   ├── writer.go           # Arrowライター（websocket対応）
+│   │   ├── reader.go           # Arrowリーダー & メタデータスキャン（後方互換）
+│   │   ├── schema.go           # スキーマ定義
+│   │   ├── handler.go          # データハンドラー
+│   │   └── channel_writer.go   # チャンネル別ライター
+│   │
+│   ├── ws/                     # WebSocket 実装
+│   │   ├── conn.go             # WebSocket接続管理
+│   │   └── router.go           # メッセージルーティング
+│   │
+│   └── services/               # ビジネスロジック
+│       ├── file_reader.go      # ファイル読み込みサービス
+│       └── file_scanner.go     # 高機能ファイルスキャン（レガシー対応・非同期処理）
+│
+├── data/                       # データ保存先
+│   └── bitfinex/
+│       ├── websocket/          # WebSocketデータ（旧v2から変更）
+│       │   ├── trades/         # 取引データ
+│       │   ├── books/          # 板データ
+│       │   └── ticker/         # ティッカーデータ
+│       └── restapi/            # REST APIデータ（旧restv2から変更）
+│           └── basedata/       # ベースデータ
+│               └── manifest.jsonl  # メタデータインデックス
+│
+├── config.yml                 # 設定ファイル
+├── Makefile                   # ビルド設定
+└── CLAUDE.md                  # 開発指針（本ファイル）
+```
+
+### 今後の拡張予定
+```
+data_controller/
+├── internal/                   # 既存構造を拡張
+│   ├── features/              # 特徴生成エンジン（新規）
 │   │   ├── calculator.go     # OFI・スプレッド計算
 │   │   ├── buffer.go         # ローリングバッファ
 │   │   └── pipeline.go       # 特徴量パイプライン
 │   │
-│   ├── mlx/                  # MLX連携
+│   ├── mlx/                  # MLX連携（新規）
 │   │   ├── cgo_bridge.go     # cgo直接呼び出し
 │   │   ├── grpc_client.go    # gRPC/UDSクライアント
 │   │   └── predictor.go      # 予測エンジン
 │   │
-│   ├── trading/              # 取引制御
+│   ├── trading/              # 取引制御（新規）
 │   │   ├── freqtrade.go      # Freqtrade API
 │   │   ├── orders.go         # 注文管理
 │   │   └── risk.go           # リスク管理
 │   │
-│   ├── monitoring/           # 監視
+│   ├── monitoring/           # 監視（新規）
 │   │   ├── metrics.go        # Prometheusメトリクス
 │   │   ├── health.go         # ヘルスチェック
 │   │   └── alerts.go         # アラート
 │   │
-│   ├── killswitch/           # 非常停止
+│   ├── killswitch/           # 非常停止（新規）
 │   │   ├── switch.go         # Kill-switch実装
 │   │   └── triggers.go       # トリガー条件
 │   │
-│   └── storage/              # ストレージ拡張
+│   └── storage/              # ストレージ拡張（新規）
 │       ├── influx.go         # InfluxDB連携
 │       └── timeseries.go     # 時系列データ管理
 │
-├── mlx_bridge/               # C++/MLXブリッジ
+├── mlx_bridge/               # C++/MLXブリッジ（新規）
 │   ├── mlx_bridge.h
 │   ├── mlx_bridge.cpp
 │   └── Makefile
 │
-└── docker/                   # Docker設定
+└── docker/                   # Docker設定（新規）
     └── influxdb/
         ├── docker-compose.yml
         └── init.sql
@@ -290,11 +363,148 @@ data_controller/
 - **段階的実装**: 段階的な機能追加・テスト
 - **設定駆動**: YAMLでの柔軟な設定変更
 
+## 🎯 最近の実装進捗
+
+### ✅ 完了済み（2024年後期〜2025年前期）
+
+#### GUI システムのモジュラー化
+- **File Viewer 改善**: 灰色文字問題を修正（`Disable()` → `SetReadOnly(true)`）
+- **表示件数増加**: ファイルビューアーで3000件のレコードを一度に表示可能
+- **アーキテクチャ分割**: fyne_gui.goの巨大なファイルを責務ベースで分割
+  - 状態管理: `internal/gui/state/app_state.go`
+  - コントローラー: `internal/gui/controllers/file_controller.go`
+  - プレゼンテーション: `internal/gui/panels/{files,viewer}_panel.go`
+  - アプリケーション: `internal/gui/app/app.go`
+- **ビルドシステム改善**: ビルドタグ対応のスタブファイル追加
+- **UIスレッド安全性**: `fyne.Do()` による非同期UI操作の安全化
+
+#### ファイル管理システムの大幅強化
+- **ドメイン層の導入**: UI層とデータアクセス層の分離（`internal/domain/`）
+- **高機能フィルタリング**: Source/Category/Symbol/Date範囲/Hour/Type による詳細フィルター
+- **非同期スキャン**: コンテキストキャンセル対応の並行ファイル検索
+- **ディレクトリ構造変更**: `v2` → `websocket`, `restv2` → `restapi` へ移行
+- **後方互換性**: 旧ディレクトリ構造の自動検出・対応
+
+#### REST API機能の拡張
+- **垂直レイアウト**: REST APIパネルを垂直配置に変更して幅を削減
+- **ベースデータ取得**: Bitfinex REST APIからの各種基本データ取得機能
+- **進捗監視**: データ取得の進捗をリアルタイム表示
+- **Apache Arrow統合**: REST APIデータのArrow形式保存
+
+#### データ処理エンジンの改良
+- **Apache Arrow最適化**: 大容量ファイルの効率的な読み込み
+- **メタデータ強化**: ファイル一覧での詳細情報表示
+- **パフォーマンス向上**: 3000件レコード表示の高速化
+- **ファイルスキャナ強化**: 複雑な条件での高速ファイル検索
+
+### 🏗 アーキテクチャの進化
+
+#### 分離前（問題）
+```go
+// fyne_gui.go - 800+ 行の巨大ファイル
+type FyneGUIApplication struct {
+    // 50+ フィールドが混在
+    // UI、状態、ロジックが全て混合
+}
+```
+
+#### 分離後（解決）
+```go
+// 責務ベースの分離
+├── state/app_state.go          # 状態管理のみ
+├── controllers/file_controller.go  # ビジネスロジックのみ
+├── panels/files_panel.go       # UI表示のみ
+└── app/app.go                  # アプリケーション制御のみ
+```
+
+#### 得られた利点
+- **テスタビリティ**: 各コンポーネントが独立してテスト可能
+- **保守性**: 機能ごとにファイルが分離され、理解・修正が容易
+- **拡張性**: 新機能追加時の影響範囲が限定的
+- **再利用性**: 汎用コンポーネントとして他の機能でも利用可能
+
+### 🔧 技術的な改善
+
+#### File Viewer の品質向上
+```go
+// 問題: 灰色で読みにくい
+a.fileViewer.Disable() // Read-only
+
+// 解決: 通常の白文字を維持
+if readOnlyEntry, ok := interface{}(a.fileViewer).(interface{ SetReadOnly(bool) }); ok {
+    readOnlyEntry.SetReadOnly(true)
+}
+```
+
+#### 非同期処理とUIスレッド安全性
+```go
+// 問題: goroutineからのUI操作でスレッドエラー
+go func() {
+    fp.statusLabel.SetText("更新中...") // エラー
+}()
+
+// 解決: fyne.Do()による安全なUI更新
+func (fp *FilesPanel) ui(f func()) {
+    fyne.Do(f)
+}
+
+go func() {
+    fp.ui(func() {
+        fp.statusLabel.SetText("更新中...") // 安全
+    })
+}()
+```
+
+#### ドメイン駆動設計の導入
+```go
+// 問題: UIレイヤーが直接Arrowファイル構造に依存
+type AppState struct {
+    FilteredFiles []arrow.FileInfo // 密結合
+}
+
+// 解決: ドメインモデルによる抽象化
+type AppState struct {
+    FilteredFiles []domain.FileItem // 疎結合
+}
+
+type FileItem struct {
+    Path     string
+    Exchange string
+    Source   string
+    Category string
+    Symbol   string
+    Date     string
+    Size     int64
+    ModTime  time.Time
+}
+```
+
+#### 大量データ表示の最適化
+```go
+// 問題: 50件制限で使いにくい
+maxRecords := min(50, len(pageData.Records))
+
+// 解決: 3000件表示で実用的
+maxRecords := min(a.pageSize, len(pageData.Records)) // pageSize = 3000
+```
+
 ## 📝 Next Steps
 
-1. **Phase 1実装開始**: 特徴生成エンジンの詳細設計
+### 短期目標（Phase 1 継続）
+1. **パフォーマンス調整**: 2秒毎のファイルスキャン頻度の最適化
+2. **エラーハンドリング強化**: 非同期処理でのエラー処理改善
+3. **統合テスト**: リファクタリング後の機能確認
+4. **メタデータキャッシュ**: 頻繁なファイルスキャンの効率化
+
+### 中期目標（Phase 2 準備）
+1. **特徴生成エンジン**: OFI・スプレッド計算の詳細設計
 2. **MLXブリッジ**: C++コードとcgo連携の実装方針確定
 3. **InfluxDB環境**: Docker環境のセットアップ
 4. **監視基盤**: Prometheus/Grafana環境構築
 
-既存のBitfinexデータ収集システムが提供する堅固な基盤を活用し、段階的にAI自動取引システムへ発展させていく戦略です。
+### 長期目標（Phase 3-4）
+1. **AI連携基盤**: MLX統合とFreqtrade連携
+2. **運用監視**: Kill-switch、アラート、自動復旧
+3. **本格運用**: launchd設定と24時間稼働体制
+
+既存のBitfinexデータ収集システムが提供する堅固な基盤に加え、モジュラー化されたGUIアーキテクチャを基盤として、段階的にAI自動取引システムへ発展させていく戦略です。

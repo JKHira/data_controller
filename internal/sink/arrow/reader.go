@@ -3,6 +3,7 @@ package arrow
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -34,12 +35,23 @@ type PageData struct {
 	TotalBytes int64
 }
 
+type SourceType string
+
+const (
+	SourceWS   SourceType = "ws"
+	SourceREST SourceType = "rest"
+	SourceFile SourceType = "file"
+)
+
 type FileInfo struct {
 	Path         string
 	Size         int64
 	ModTime      time.Time
+	Exchange     string
 	Channel      string
 	Symbol       string
+	SourceType   SourceType
+	Category     string
 	Date         string
 	Hour         string
 	IsAccessible bool
@@ -463,23 +475,115 @@ func (r *FileReader) parseFilePath(path string, info os.FileInfo) FileInfo {
 		IsAccessible: true,
 	}
 
-	// Parse channel and symbol from path
-	// Expected format: .../channel/symbol/dt=date/...
-	parts := strings.Split(path, "/")
+	// Parse metadata from path
+	// Expected formats:
+	// - WebSocket: data/{exchange}/websocket/{channel}/{symbol}/dt=date/...
+	// - REST API: data/{exchange}/restapi/{category}/date=YYYY-MM-DD/hour=HH/...
+	parts := strings.Split(path, string(os.PathSeparator))
+
 	for i, part := range parts {
-		if i >= 2 && strings.HasPrefix(parts[i-2], "v2") {
+		if part == "data" && i+1 < len(parts) {
+			// Extract exchange (e.g., bitfinex)
+			fileInfo.Exchange = parts[i+1]
+
+			// Determine source type and parse accordingly
 			if i+2 < len(parts) {
-				fileInfo.Channel = part
-				fileInfo.Symbol = parts[i+1]
+				if parts[i+2] == "websocket" || parts[i+2] == "v2" {
+					// WebSocket data: data/{exchange}/websocket/{channel}/{symbol}/...
+					fileInfo.SourceType = SourceWS
+					if i+4 < len(parts) {
+						fileInfo.Channel = parts[i+3]
+						fileInfo.Symbol = parts[i+4]
+					}
+				} else if strings.Contains(parts[i+2], "rest") {
+					// REST API data: data/{exchange}/restapi/{category}/...
+					fileInfo.SourceType = SourceREST
+					if i+3 < len(parts) {
+						fileInfo.Category = parts[i+3]
+						if fileInfo.Category == "basedata" {
+							fileInfo.Channel = "basedata"
+						}
+					}
+				}
 			}
+			break
 		}
+
+		// Parse date and hour from path components
 		if strings.HasPrefix(part, "dt=") {
 			fileInfo.Date = strings.TrimPrefix(part, "dt=")
+		}
+		if strings.HasPrefix(part, "date=") {
+			fileInfo.Date = strings.TrimPrefix(part, "date=")
 		}
 		if strings.HasPrefix(part, "hour=") {
 			fileInfo.Hour = strings.TrimPrefix(part, "hour=")
 		}
 	}
 
+	// Auto-detect category based on filename or path if not set
+	if fileInfo.Category == "" {
+		lower := strings.ToLower(path)
+		if strings.Contains(lower, "base") || strings.Contains(lower, "basedata") {
+			fileInfo.Category = "basedata"
+		} else if strings.Contains(lower, "index") {
+			fileInfo.Category = "index"
+		}
+	}
+
+	// Set default source type if not determined
+	if fileInfo.SourceType == "" {
+		fileInfo.SourceType = SourceFile
+	}
+
 	return fileInfo
+}
+
+// ScanDataFiles walks basePath and returns FileInfo entries with metadata parsed from path
+func (r *FileReader) ScanDataFiles(basePath string) ([]FileInfo, error) {
+	r.logger.Info("Scanning data files with metadata", zap.String("basePath", basePath))
+
+	var files []FileInfo
+
+	err := filepath.WalkDir(basePath, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // continue on errors
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		// Include various file types for metadata scanning
+		ext := strings.ToLower(filepath.Ext(p))
+		if ext != ".arrow" && ext != ".parquet" && ext != ".jsonl" && ext != ".zst" && ext != ".json" {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		// Parse file metadata using existing parseFilePath function
+		fileInfo := r.parseFilePath(p, info)
+
+		files = append(files, fileInfo)
+		return nil
+	})
+
+	if err != nil {
+		r.logger.Error("Failed to scan data files", zap.Error(err))
+		return nil, err
+	}
+
+	// Sort by modification time (newest first for better UX)
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].ModTime.After(files[j].ModTime)
+	})
+
+	r.logger.Info("Scanned data files",
+		zap.Int("totalFiles", len(files)),
+		zap.String("basePath", basePath))
+
+	return files, nil
 }

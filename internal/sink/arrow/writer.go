@@ -180,7 +180,7 @@ func (w *Writer) createNewSegment(channel schema.Channel, symbol string, segment
 		now.Add(time.Hour).Format("2006-01-02T15:04:05Z"),
 		w.segmentSizeMB)
 
-	dirPath := filepath.Join(w.basePath, "bitfinex", "v2", string(channel), symbol,
+	dirPath := filepath.Join(w.basePath, "bitfinex", "websocket", string(channel), symbol,
 		fmt.Sprintf("dt=%s", now.Format("2006-01-02")),
 		fmt.Sprintf("hour=%02d", now.Hour()),
 		dirName)

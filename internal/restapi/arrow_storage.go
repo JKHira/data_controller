@@ -43,7 +43,7 @@ func NewArrowStorage(logger *zap.Logger) *ArrowStorage {
 // SaveBaseDataAsArrow saves base data in Arrow IPC format with manifest
 func (a *ArrowStorage) SaveBaseDataAsArrow(data interface{}, endpoint, exchange string, timestamp time.Time) (string, error) {
 	// Create base directory structure
-	baseDir := fmt.Sprintf("data/%s/restv2/basedata", exchange)
+	baseDir := fmt.Sprintf("data/%s/restapi/basedata", exchange)
 	dateDir := timestamp.Format("2006-01-02")
 	hourDir := fmt.Sprintf("hour=%02d", timestamp.Hour())
 

@@ -171,7 +171,7 @@ func (c *BitfinexClient) FetchBaseData(ctx context.Context, options BaseDataOpti
 	c.logger.Info("Starting Bitfinex base data fetch", zap.Any("options", options))
 
 	// Create storage directory
-	storageDir := "data/bitfinex/restv2/basedata"
+	storageDir := "data/bitfinex/restapi/basedata"
 	timestamp := time.Now().UTC()
 	timestampStr := timestamp.Format("20060102T150405Z")
 
