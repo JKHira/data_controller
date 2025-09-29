@@ -3,286 +3,252 @@ package gui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"go.uber.org/zap"
 
+	"github.com/trade-engine/data-controller/internal/config"
 	"github.com/trade-engine/data-controller/internal/restapi"
+	"github.com/trade-engine/data-controller/internal/services"
 )
 
-// RestAPIPanel manages the REST API functionality
+// RestAPIPanel manages the REST API configuration workflow.
 type RestAPIPanel struct {
 	logger         *zap.Logger
-	bitfinexClient *restapi.BitfinexClient
+	cfg            *config.Config
+	refreshManager *services.ConfigRefreshManager
+	statusCallback func(string)
 
-	// UI state
-	isRunning      bool
-	runningMutex   sync.RWMutex
+	runningMu sync.Mutex
+	running   bool
 
-	// Base Data options
-	baseDataOptions *restapi.BaseDataOptions
-
-	// UI components
-	getBaseDataBtn  *widget.Button
-	progressLog     *widget.List
-	progressData    []string
-	progressMutex   sync.Mutex
-
-	// Checkboxes for base data options
-	checkboxes      map[string]*widget.Check
+	configButton   *flatButton
+	optionalButton *flatButton
 }
 
-// NewRestAPIPanel creates a new REST API panel
-func NewRestAPIPanel(logger *zap.Logger) *RestAPIPanel {
-	panel := &RestAPIPanel{
+// NewRestAPIPanel creates a new REST API panel with configuration controls.
+func NewRestAPIPanel(logger *zap.Logger, cfg *config.Config, manager *services.ConfigRefreshManager, callback func(string)) *RestAPIPanel {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &RestAPIPanel{
 		logger:         logger,
-		bitfinexClient: restapi.NewBitfinexClient(logger),
-		baseDataOptions: &restapi.BaseDataOptions{},
-		progressData:   make([]string, 0),
-		checkboxes:     make(map[string]*widget.Check),
+		cfg:            cfg,
+		refreshManager: manager,
+		statusCallback: callback,
 	}
-
-	panel.createUI()
-	return panel
 }
 
-// createUI creates the user interface components
-func (p *RestAPIPanel) createUI() {
-	// Get Base Data button
-	p.getBaseDataBtn = widget.NewButton("📊 Get Base Data", p.handleGetBaseData)
-	p.getBaseDataBtn.Importance = widget.MediumImportance
+// CreateBitfinexConfigPanel builds the Bitfinex configuration panel content.
+func (p *RestAPIPanel) CreateBitfinexConfigPanel() fyne.CanvasObject {
+	essentialList := p.buildEndpointList("Essential & Daily", services.EssentialEndpointInfos())
+	optionalList := p.buildEndpointList("Optional (Weekly)", services.OptionalEndpointInfos())
 
-	// Progress log list
-	p.progressLog = widget.NewList(
-		func() int { return len(p.progressData) },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			if id < len(p.progressData) {
-				label := obj.(*widget.Label)
-				label.SetText(p.progressData[id])
-			}
-		},
-	)
-}
+	p.configButton = newFlatButton("Refresh Config", func() {
+		p.executeRefresh(true)
+	})
+	p.optionalButton = newFlatButton("Refresh Optional", func() {
+		p.executeOptional()
+	})
 
-// CreateBitfinexBaseDataPanel creates the Bitfinex Base Data tab content
-func (p *RestAPIPanel) CreateBitfinexBaseDataPanel() fyne.CanvasObject {
-	// Create checkboxes for different data types
-	p.createCheckboxes()
-
-	// Listings section
-	listingsCard := widget.NewCard("📋 Listings", "", container.NewVBox(
-		p.checkboxes["spot_pairs"],
-		p.checkboxes["margin_pairs"],
-		p.checkboxes["futures_pairs"],
-		p.checkboxes["currencies"],
-		p.checkboxes["margin_currencies"],
-	))
-
-	// Mappings section
-	mappingsCard := widget.NewCard("🗺️ Mappings", "", container.NewVBox(
-		p.checkboxes["currency_labels"],
-		p.checkboxes["currency_symbols"],
-		p.checkboxes["currency_units"],
-		p.checkboxes["currency_underlying"],
-	))
-
-	// Other data section
-	otherCard := widget.NewCard("📊 Other Data", "", container.NewVBox(
-		p.checkboxes["active_tickers"],
-	))
-
-	// Options layout - vertical arrangement for narrower width
-	optionsLayout := container.NewVBox(
-		listingsCard,
-		mappingsCard,
-		otherCard,
-	)
-
-	// Control buttons
-	selectAllBtn := widget.NewButton("✓ Select All", p.handleSelectAll)
-	selectNoneBtn := widget.NewButton("✗ Select None", p.handleSelectNone)
-
-	buttonRow := container.NewHBox(
-		p.getBaseDataBtn,
+	content := container.NewVBox(
+		essentialList,
+		p.configButton,
 		widget.NewSeparator(),
-		selectAllBtn,
-		selectNoneBtn,
+		optionalList,
+		p.optionalButton,
 	)
 
-	// Progress log
-	progressCard := widget.NewCard("📄 Progress Log", "",
-		container.NewVScroll(p.progressLog),
-	)
-	progressCard.Resize(fyne.NewSize(800, 200))
-
-	// Main layout
-	content := container.NewBorder(
-		container.NewVBox(optionsLayout, buttonRow), // top
-		progressCard,                                 // bottom
-		nil, nil,                                    // left, right
-		nil,                                         // center
-	)
-
-	return content
+	return container.NewVScroll(content)
 }
 
-// createCheckboxes creates all the checkboxes for base data options
-func (p *RestAPIPanel) createCheckboxes() {
-	// Listings
-	p.checkboxes["spot_pairs"] = widget.NewCheck("Spot Pairs (pub:list:pair:exchange)", p.updateOptions)
-	p.checkboxes["margin_pairs"] = widget.NewCheck("Margin Pairs (pub:list:pair:margin)", p.updateOptions)
-	p.checkboxes["futures_pairs"] = widget.NewCheck("Futures Pairs (pub:list:pair:futures)", p.updateOptions)
-	p.checkboxes["currencies"] = widget.NewCheck("Currencies (pub:list:currency)", p.updateOptions)
-	p.checkboxes["margin_currencies"] = widget.NewCheck("Margin Currencies (pub:list:currency:margin)", p.updateOptions)
+func (p *RestAPIPanel) buildEndpointList(title string, endpoints []services.EndpointInfo) fyne.CanvasObject {
+	header := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	header.Wrapping = fyne.TextWrapWord
 
-	// Mappings
-	p.checkboxes["currency_labels"] = widget.NewCheck("Currency Labels (pub:map:currency:label)", p.updateOptions)
-	p.checkboxes["currency_symbols"] = widget.NewCheck("Currency Symbols (pub:map:currency:sym)", p.updateOptions)
-	p.checkboxes["currency_units"] = widget.NewCheck("Currency Units (pub:map:currency:unit)", p.updateOptions)
-	p.checkboxes["currency_underlying"] = widget.NewCheck("Currency Underlying (pub:map:currency:undl)", p.updateOptions)
-
-	// Other data
-	p.checkboxes["active_tickers"] = widget.NewCheck("Active Tickers (tickers?symbols=ALL)", p.updateOptions)
-
-	// Set default selections (commonly used ones)
-	p.checkboxes["spot_pairs"].SetChecked(true)
-	p.checkboxes["currencies"].SetChecked(true)
-	p.checkboxes["currency_labels"].SetChecked(true)
-	p.checkboxes["active_tickers"].SetChecked(true)
-}
-
-// updateOptions updates the base data options based on checkbox states
-func (p *RestAPIPanel) updateOptions(checked bool) {
-	p.baseDataOptions.SpotPairs = p.checkboxes["spot_pairs"].Checked
-	p.baseDataOptions.MarginPairs = p.checkboxes["margin_pairs"].Checked
-	p.baseDataOptions.FuturesPairs = p.checkboxes["futures_pairs"].Checked
-	p.baseDataOptions.Currencies = p.checkboxes["currencies"].Checked
-	p.baseDataOptions.MarginCurrencies = p.checkboxes["margin_currencies"].Checked
-	p.baseDataOptions.CurrencyLabels = p.checkboxes["currency_labels"].Checked
-	p.baseDataOptions.CurrencySymbols = p.checkboxes["currency_symbols"].Checked
-	p.baseDataOptions.CurrencyUnits = p.checkboxes["currency_units"].Checked
-	p.baseDataOptions.CurrencyUnderlying = p.checkboxes["currency_underlying"].Checked
-	p.baseDataOptions.ActiveTickers = p.checkboxes["active_tickers"].Checked
-}
-
-// handleSelectAll selects all checkboxes
-func (p *RestAPIPanel) handleSelectAll() {
-	for _, checkbox := range p.checkboxes {
-		checkbox.SetChecked(true)
+	rows := []fyne.CanvasObject{header}
+	for _, ep := range endpoints {
+		text := fmt.Sprintf("• %s (%s)", ep.Description, ep.Endpoint)
+		label := widget.NewLabel(text)
+		label.Wrapping = fyne.TextWrapWord
+		rows = append(rows, label)
 	}
+
+	return container.NewVBox(rows...)
 }
 
-// handleSelectNone deselects all checkboxes
-func (p *RestAPIPanel) handleSelectNone() {
-	for _, checkbox := range p.checkboxes {
-		checkbox.SetChecked(false)
-	}
+func (p *RestAPIPanel) executeRefresh(force bool) {
+	p.runTask("Refreshing config...", func(ctx context.Context) ([]restapi.FetchResult, error) {
+		if p.refreshManager == nil {
+			return nil, fmt.Errorf("refresh manager not available")
+		}
+		exchange := p.activeExchange()
+		return p.refreshManager.RefreshConfigEndpoints(ctx, exchange, force)
+	})
 }
 
-// handleGetBaseData handles the Get Base Data button click
-func (p *RestAPIPanel) handleGetBaseData() {
-	p.runningMutex.Lock()
-	defer p.runningMutex.Unlock()
+func (p *RestAPIPanel) executeOptional() {
+	p.runTask("Refreshing optional metadata...", func(ctx context.Context) ([]restapi.FetchResult, error) {
+		if p.refreshManager == nil {
+			return nil, fmt.Errorf("refresh manager not available")
+		}
+		exchange := p.activeExchange()
+		return p.refreshManager.RefreshOptionalEndpoints(ctx, exchange, true)
+	})
+}
 
-	if p.isRunning {
-		p.logger.Warn("Base data fetch already in progress")
+func (p *RestAPIPanel) runTask(status string, task func(context.Context) ([]restapi.FetchResult, error)) {
+	p.runningMu.Lock()
+	if p.running {
+		p.runningMu.Unlock()
 		return
 	}
+	p.running = true
+	p.runningMu.Unlock()
 
-	// Check if at least one option is selected
-	hasSelection := p.baseDataOptions.SpotPairs || p.baseDataOptions.MarginPairs ||
-		p.baseDataOptions.FuturesPairs || p.baseDataOptions.Currencies ||
-		p.baseDataOptions.MarginCurrencies || p.baseDataOptions.CurrencyLabels ||
-		p.baseDataOptions.CurrencySymbols || p.baseDataOptions.CurrencyUnits ||
-		p.baseDataOptions.CurrencyUnderlying || p.baseDataOptions.ActiveTickers
+	p.setButtonsEnabled(false)
+	p.updateStatus(status)
 
-	if !hasSelection {
-		p.addProgressLog("❌ No data types selected. Please select at least one option.")
-		return
-	}
-
-	p.isRunning = true
-	p.getBaseDataBtn.SetText("📊 Fetching...")
-	p.getBaseDataBtn.Importance = widget.HighImportance
-	p.getBaseDataBtn.Disable()
-
-	// Clear previous progress
-	p.clearProgressLog()
-	p.addProgressLog("🚀 Starting Bitfinex base data fetch...")
-
-	// Start fetching in a separate goroutine
 	go func() {
 		defer func() {
-			p.runningMutex.Lock()
-			p.isRunning = false
-			fyne.Do(func() {
-				p.getBaseDataBtn.SetText("📊 Get Base Data")
-				p.getBaseDataBtn.Importance = widget.MediumImportance
-				p.getBaseDataBtn.Enable()
-			})
-			p.runningMutex.Unlock()
+			p.runningMu.Lock()
+			p.running = false
+			p.runningMu.Unlock()
+			p.setButtonsEnabled(true)
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 
-		err := p.bitfinexClient.FetchBaseData(ctx, *p.baseDataOptions, p.onProgress)
+		results, err := task(ctx)
 		if err != nil {
-			p.logger.Error("Base data fetch failed", zap.Error(err))
-			p.addProgressLog(fmt.Sprintf("❌ Fetch failed: %v", err))
-		} else {
-			p.addProgressLog("✅ Base data fetch completed successfully!")
+			p.logger.Error("REST config refresh failed", zap.Error(err))
+			p.updateStatus(fmt.Sprintf("❌ %v", err))
+			return
+		}
+
+		exchange := p.activeExchange()
+		summary := services.SummarizeResults(exchange, results)
+		if summary == "" {
+			summary = "No endpoints required refresh"
+		}
+
+		p.updateStatus("✅ " + summary)
+		if p.statusCallback != nil {
+			p.statusCallback(summary)
 		}
 	}()
 }
 
-// onProgress handles progress updates from the fetch operation
-func (p *RestAPIPanel) onProgress(result restapi.FetchResult) {
-	timestamp := result.Timestamp.Format("15:04:05")
+func (p *RestAPIPanel) setButtonsEnabled(enabled bool) {
+	fyne.Do(func() {
+		if enabled {
+			p.configButton.Enable()
+			p.optionalButton.Enable()
+		} else {
+			p.configButton.Disable()
+			p.optionalButton.Disable()
+		}
+	})
+}
 
-	if result.Success {
-		message := fmt.Sprintf("[%s] ✅ %s: %d items saved to %s",
-			timestamp, result.Endpoint, result.Count, result.FilePath)
-		p.addProgressLog(message)
+func (p *RestAPIPanel) updateStatus(text string) {}
+
+func (p *RestAPIPanel) activeExchange() string {
+	if p.cfg != nil && p.cfg.ActiveExchange != "" {
+		return p.cfg.ActiveExchange
+	}
+	return "bitfinex"
+}
+
+// flatButton is a minimal rectangular button used in the REST panel.
+type flatButton struct {
+	widget.BaseWidget
+	label    string
+	onTap    func()
+	disabled bool
+}
+
+func newFlatButton(label string, onTap func()) *flatButton {
+	b := &flatButton{label: label, onTap: onTap}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *flatButton) Disable() {
+	b.disabled = true
+	b.Refresh()
+}
+
+func (b *flatButton) Enable() {
+	b.disabled = false
+	b.Refresh()
+}
+
+func (b *flatButton) Tapped(*fyne.PointEvent) {
+	if b.disabled {
+		return
+	}
+	if b.onTap != nil {
+		b.onTap()
+	}
+}
+
+func (b *flatButton) CreateRenderer() fyne.WidgetRenderer {
+	rect := canvas.NewRectangle(color.RGBA{R: 60, G: 90, B: 190, A: 255})
+	label := widget.NewLabel(b.label)
+	label.Alignment = fyne.TextAlignCenter
+	label.Wrapping = fyne.TextWrapOff
+
+	padded := container.NewPadded(container.NewCenter(label))
+	objects := []fyne.CanvasObject{rect, padded}
+
+	return &flatButtonRenderer{button: b, rect: rect, label: label, padded: padded, objects: objects}
+}
+
+// flatButtonRenderer handles drawing of the flat button.
+type flatButtonRenderer struct {
+	button  *flatButton
+	rect    *canvas.Rectangle
+	label   *widget.Label
+	padded  *fyne.Container
+	objects []fyne.CanvasObject
+}
+
+func (r *flatButtonRenderer) Layout(size fyne.Size) {
+	r.rect.Resize(size)
+	r.padded.Resize(size)
+}
+
+func (r *flatButtonRenderer) MinSize() fyne.Size {
+	min := r.label.MinSize()
+	pad := float32(theme.Padding()) * 2
+	width := min.Width + pad
+	height := min.Height + pad
+	if width < 200 {
+		width = 200
+	}
+	return fyne.NewSize(width, height)
+}
+
+func (r *flatButtonRenderer) Refresh() {
+	if r.button.disabled {
+		r.rect.FillColor = color.RGBA{R: 120, G: 120, B: 120, A: 255}
 	} else {
-		message := fmt.Sprintf("[%s] ❌ %s: %s",
-			timestamp, result.Endpoint, result.Error)
-		p.addProgressLog(message)
+		r.rect.FillColor = color.RGBA{R: 60, G: 90, B: 190, A: 255}
 	}
+	r.rect.Refresh()
+	r.label.SetText(r.button.label)
+	r.padded.Refresh()
 }
 
-// addProgressLog adds a new message to the progress log
-func (p *RestAPIPanel) addProgressLog(message string) {
-	p.progressMutex.Lock()
-	defer p.progressMutex.Unlock()
-
-	// Add to beginning of slice for newest first
-	p.progressData = append([]string{message}, p.progressData...)
-
-	// Keep only latest 50 entries
-	if len(p.progressData) > 50 {
-		p.progressData = p.progressData[:50]
-	}
-
-	// Update UI on main thread
-	fyne.Do(func() {
-		p.progressLog.Refresh()
-	})
-}
-
-// clearProgressLog clears the progress log
-func (p *RestAPIPanel) clearProgressLog() {
-	p.progressMutex.Lock()
-	defer p.progressMutex.Unlock()
-
-	p.progressData = make([]string, 0)
-
-	fyne.Do(func() {
-		p.progressLog.Refresh()
-	})
-}
+func (r *flatButtonRenderer) BackgroundColor() color.Color { return color.Transparent }
+func (r *flatButtonRenderer) Objects() []fyne.CanvasObject { return r.objects }
+func (r *flatButtonRenderer) Destroy()                     {}

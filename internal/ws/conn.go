@@ -15,41 +15,41 @@ import (
 )
 
 type ConnectionManager struct {
-	cfg       *config.Config
-	logger    *zap.Logger
-	connMutex sync.RWMutex
+	cfg         *config.Config
+	logger      *zap.Logger
+	connMutex   sync.RWMutex
 	connections map[string]*Connection
-	router    *Router
-	ctx       context.Context
-	cancel    context.CancelFunc
+	router      *Router
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 type Connection struct {
-	ID              string
-	URL             string
-	conn            *websocket.Conn
-	connMutex       sync.RWMutex
-	channels        map[int32]*ChannelInfo
-	channelsMutex   sync.RWMutex
-	lastHeartbeat   map[int32]time.Time
-	heartbeatMutex  sync.RWMutex
-	reconnectChan   chan struct{}
-	done            chan struct{}
-	logger          *zap.Logger
-	confFlags       int64
-	isConnected     bool
-	subscribeQueue  []SubscribeRequest
-	queueMutex      sync.Mutex
-	router          *Router
+	ID             string
+	URL            string
+	conn           *websocket.Conn
+	connMutex      sync.RWMutex
+	channels       map[int32]*ChannelInfo
+	channelsMutex  sync.RWMutex
+	lastHeartbeat  map[int32]time.Time
+	heartbeatMutex sync.RWMutex
+	reconnectChan  chan struct{}
+	done           chan struct{}
+	logger         *zap.Logger
+	confFlags      int64
+	isConnected    bool
+	subscribeQueue []SubscribeRequest
+	queueMutex     sync.Mutex
+	router         *Router
 }
 
 type ChannelInfo struct {
-	ID       int32
-	Channel  string
-	Symbol   string
-	Pair     string
-	SubID    *int64
-	SubReq   SubscribeRequest
+	ID      int32
+	Channel string
+	Symbol  string
+	Pair    string
+	SubID   *int64
+	SubReq  SubscribeRequest
 }
 
 type SubscribeRequest struct {
@@ -68,23 +68,23 @@ type ConfMessage struct {
 }
 
 type InfoMessage struct {
-	Event   string      `json:"event"`
-	Version float64     `json:"version"`
-	ServID  string      `json:"serverId"`
-	Code    *int        `json:"code,omitempty"`
-	Msg     *string     `json:"msg,omitempty"`
+	Event   string  `json:"event"`
+	Version float64 `json:"version"`
+	ServID  string  `json:"serverId"`
+	Code    *int    `json:"code,omitempty"`
+	Msg     *string `json:"msg,omitempty"`
 }
 
 type SubscribeResponse struct {
-	Event    string `json:"event"`
-	Channel  string `json:"channel"`
-	ChanID   int32  `json:"chanId"`
-	Symbol   string `json:"symbol"`
-	Pair     string `json:"pair"`
-	Prec     string `json:"prec,omitempty"`
-	Freq     string `json:"freq,omitempty"`
-	Len      string `json:"len,omitempty"`
-	SubID    *int64 `json:"subId,omitempty"`
+	Event   string `json:"event"`
+	Channel string `json:"channel"`
+	ChanID  int32  `json:"chanId"`
+	Symbol  string `json:"symbol"`
+	Pair    string `json:"pair"`
+	Prec    string `json:"prec,omitempty"`
+	Freq    string `json:"freq,omitempty"`
+	Len     string `json:"len,omitempty"`
+	SubID   *int64 `json:"subId,omitempty"`
 }
 
 func NewConnectionManager(cfg *config.Config, logger *zap.Logger, router *Router) *ConnectionManager {
@@ -100,43 +100,50 @@ func NewConnectionManager(cfg *config.Config, logger *zap.Logger, router *Router
 }
 
 func (cm *ConnectionManager) Start() error {
-	cm.logger.Info("Starting connection manager")
+	return cm.StartWithSymbols(cm.cfg.Symbols)
+}
+
+func (cm *ConnectionManager) StartWithSymbols(symbols []string) error {
+	cm.logger.Info("Starting connection manager", zap.Int("symbol_count", len(symbols)))
+	return cm.start(symbols)
+}
+
+func (cm *ConnectionManager) start(symbols []string) error {
+	if len(symbols) == 0 {
+		return fmt.Errorf("no symbols provided for connection")
+	}
+
+	cm.connMutex.Lock()
+	if cm.cancel != nil && cm.ctx != nil && cm.ctx.Err() == nil && len(cm.connections) > 0 {
+		cm.connMutex.Unlock()
+		return fmt.Errorf("connection manager already running")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cm.ctx = ctx
+	cm.cancel = cancel
+	cm.connections = make(map[string]*Connection)
+	cm.connMutex.Unlock()
 
 	symbolsPerConn := make([][]string, 0)
 	maxChannelsPerConn := 30 // Bitfinex limit
-	channelsNeeded := 0
-
-	for range cm.cfg.Symbols {
-		if cm.cfg.Channels.Ticker.Enabled {
-			channelsNeeded++
-		}
-		if cm.cfg.Channels.Trades.Enabled {
-			channelsNeeded++
-		}
-		if cm.cfg.Channels.Books.Enabled {
-			channelsNeeded++
-		}
-		if cm.cfg.Channels.RawBooks.Enabled {
-			channelsNeeded++
-		}
-	}
 
 	symbolsPerBatch := maxChannelsPerConn / 4
 	if symbolsPerBatch == 0 {
 		symbolsPerBatch = 1
 	}
 
-	for i := 0; i < len(cm.cfg.Symbols); i += symbolsPerBatch {
+	for i := 0; i < len(symbols); i += symbolsPerBatch {
 		end := i + symbolsPerBatch
-		if end > len(cm.cfg.Symbols) {
-			end = len(cm.cfg.Symbols)
+		if end > len(symbols) {
+			end = len(symbols)
 		}
-		symbolsPerConn = append(symbolsPerConn, cm.cfg.Symbols[i:end])
+		symbolsPerConn = append(symbolsPerConn, symbols[i:end])
 	}
 
-	for i, symbols := range symbolsPerConn {
+	for i, batch := range symbolsPerConn {
 		connID := fmt.Sprintf("conn-%d", i)
-		conn, err := cm.createConnection(connID, symbols)
+		conn, err := cm.createConnection(connID, batch)
 		if err != nil {
 			return fmt.Errorf("failed to create connection %s: %w", connID, err)
 		}
@@ -145,7 +152,7 @@ func (cm *ConnectionManager) Start() error {
 		cm.connections[connID] = conn
 		cm.connMutex.Unlock()
 
-		go conn.run(cm.ctx)
+		go conn.run(ctx)
 	}
 
 	return nil
@@ -633,14 +640,19 @@ func (c *Connection) ping() error {
 
 func (cm *ConnectionManager) Stop() {
 	cm.logger.Info("Stopping connection manager")
-	cm.cancel()
 
-	cm.connMutex.RLock()
+	cm.connMutex.Lock()
+	if cm.cancel != nil {
+		cm.cancel()
+	}
 	connections := make([]*Connection, 0, len(cm.connections))
 	for _, conn := range cm.connections {
 		connections = append(connections, conn)
 	}
-	cm.connMutex.RUnlock()
+	cm.connections = make(map[string]*Connection)
+	cm.ctx = nil
+	cm.cancel = nil
+	cm.connMutex.Unlock()
 
 	// Gracefully disconnect all connections
 	for _, conn := range connections {

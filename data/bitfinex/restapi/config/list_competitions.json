@@ -1,0 +1,32 @@
+[
+  [
+    "plu_diff:1w:tGLOBAL:USD",
+    "plu_diff:1M:tGLOBAL:USD",
+    "plu:1w:tGLOBAL:USD",
+    "plu:3h:tGLOBAL:USD",
+    "vol:1w:tGLOBAL:USD",
+    "vol:1M:tGLOBAL:USD",
+    "plr:1M:tGLOBAL:USD",
+    "vol:1M:tPAPER:USD",
+    "vol:1w:tPAPER:USD",
+    "plu:3h:tBTCUSD",
+    "plu:3h:tBTCF0:USTF0",
+    "plu:3h:tBTCUST",
+    "plu:3h:tBTCEUR",
+    "plu:3h:tLEOUSD",
+    "plu:3h:tETHUSD",
+    "plu:3h:tETHF0:USTF0",
+    "plu:3h:tETHUST",
+    "plu:3h:tEOSUSD",
+    "plu:3h:tLTCUSD",
+    "plu:3h:tETCUSD",
+    "vol:1M:tBTCUSD",
+    "vol:1M:tBTCUST",
+    "vol:1M:tBTCF0:USTF0",
+    "vol:1M:tETHF0:USTF0",
+    "vol:1M:tETHUST",
+    "vol:1M:tXAUTF0:USTF0",
+    "vol:1M:tXAUT:USD",
+    "vol:1M:tUSTUSD"
+  ]
+]

@@ -142,22 +142,17 @@ func (fs *FileScanner) FindFiles(ctx context.Context, params domain.ScanParams) 
 		return []domain.FileItem{}, nil
 	}
 
-	// Generate date range
 	dates := fs.generateDateRange(params.DateFrom, params.DateTo)
 	hours := fs.generateHours(params.Hour)
 	sourceDirs := sourceCandidates(params.Source)
 
-	// Handle "All" categories
 	if strings.HasPrefix(params.Category, "All ") {
 		return fs.findAllCategoryFiles(ctx, params, dates, hours, sourceDirs)
 	}
 
-	// Handle multiple exchanges (ALL support)
 	var exchanges []string
 	if params.Exchange == "" || strings.EqualFold(params.Exchange, "ALL") {
-		// Get all exchanges from data/ directory
-		dataRoot := filepath.Join(params.BasePath, "data")
-		exchangeDirs, err := os.ReadDir(dataRoot)
+		exchangeDirs, err := os.ReadDir(fs.basePath)
 		if err == nil {
 			for _, ex := range exchangeDirs {
 				if ex.IsDir() {
@@ -169,67 +164,77 @@ func (fs *FileScanner) FindFiles(ctx context.Context, params domain.ScanParams) 
 		exchanges = []string{params.Exchange}
 	}
 
-	// Scan all exchanges, sources, dates, hours
 	for _, exchange := range exchanges {
 		for _, sourceDir := range sourceDirs {
 			for _, date := range dates {
 				for _, hour := range hours {
-					// Check if context is cancelled
 					select {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					default:
 					}
 
-					// Build path pattern with current exchange
-					basePath := filepath.Join(
-						params.BasePath,
-						"data",
-						exchange,
-						sourceDir,
-						params.Category,
-					)
+					categoryPath := filepath.Join(fs.basePath, exchange, sourceDir, params.Category)
 
-					// Add symbol if specified and not "ALL"
-					if params.Symbol != "" && params.Symbol != "ALL" {
-						basePath = filepath.Join(basePath, params.Symbol)
-					}
+					if params.Symbol != "" && !strings.EqualFold(params.Symbol, "ALL") {
+						symbolPath := filepath.Join(categoryPath, params.Symbol, fmt.Sprintf("dt=%s", date))
+						if hour != "" {
+							symbolPath = filepath.Join(symbolPath, fmt.Sprintf("hour=%s", hour))
+						}
 
-					// Add date and hour
-					basePath = filepath.Join(basePath, fmt.Sprintf("dt=%s", date))
-					if hour != "" {
-						basePath = filepath.Join(basePath, fmt.Sprintf("hour=%s", hour))
-					}
+						files, err := fs.scanPath(symbolPath, params)
+						if err != nil {
+							fs.logger.Debug("Failed to scan path", zap.String("path", symbolPath), zap.Error(err))
+							continue
+						}
 
-					// Scan this path
-					files, err := fs.scanPath(basePath, params)
-					if err != nil {
-						// Log error but continue scanning other paths
-						fs.logger.Debug("Failed to scan path",
-							zap.String("path", basePath),
-							zap.Error(err))
+						for i := range files {
+							files[i].Exchange = exchange
+							files[i].Source = normalizeSource(sourceDir)
+							files[i].Category = params.Category
+							files[i].Symbol = params.Symbol
+							files[i].Date = date
+							files[i].Hour = hour
+						}
+
+						allFiles = append(allFiles, files...)
 						continue
 					}
 
-					// Set metadata for found files
-					for i := range files {
-						files[i].Exchange = exchange
-						files[i].Source = normalizeSource(sourceDir)
-						files[i].Category = params.Category
-						files[i].Date = date
-						files[i].Hour = hour
-						if params.Symbol != "" && params.Symbol != "ALL" {
-							files[i].Symbol = params.Symbol
-						}
+					symbols, err := fs.getSymbolsInCategory(categoryPath)
+					if err != nil {
+						fs.logger.Debug("No symbols under category", zap.String("path", categoryPath), zap.Error(err))
+						continue
 					}
 
-					allFiles = append(allFiles, files...)
+					for _, symbol := range symbols {
+						symbolPath := filepath.Join(categoryPath, symbol, fmt.Sprintf("dt=%s", date))
+						if hour != "" {
+							symbolPath = filepath.Join(symbolPath, fmt.Sprintf("hour=%s", hour))
+						}
+
+						files, err := fs.scanPath(symbolPath, params)
+						if err != nil {
+							fs.logger.Debug("Failed to scan path", zap.String("path", symbolPath), zap.Error(err))
+							continue
+						}
+
+						for i := range files {
+							files[i].Exchange = exchange
+							files[i].Source = normalizeSource(sourceDir)
+							files[i].Category = params.Category
+							files[i].Symbol = symbol
+							files[i].Date = date
+							files[i].Hour = hour
+						}
+
+						allFiles = append(allFiles, files...)
+					}
 				}
 			}
 		}
 	}
 
-	// Filename filter removed as requested - search by path structure only
 	return allFiles, nil
 }
 
@@ -333,52 +338,61 @@ func (fs *FileScanner) extractSymbolFromPath(path, exchange, source, category st
 func (fs *FileScanner) findAllCategoryFiles(ctx context.Context, params domain.ScanParams, dates, hours []string, sourceDirs []string) ([]domain.FileItem, error) {
 	var allFiles []domain.FileItem
 
-	// Extract category from "All books" -> "books"
 	category := strings.TrimPrefix(params.Category, "All ")
 
-	for _, sourceDir := range sourceDirs {
-		// Get all symbols for this category
-		categoryPath := filepath.Join(params.BasePath, "data", params.Exchange, sourceDir, category)
-		symbols, err := fs.getSymbolsInCategory(categoryPath)
-		if err != nil {
-			fs.logger.Debug("Failed to get symbols", zap.String("path", categoryPath), zap.Error(err))
-			continue
+	var exchanges []string
+	if params.Exchange == "" || strings.EqualFold(params.Exchange, "ALL") {
+		exchangeDirs, err := os.ReadDir(fs.basePath)
+		if err == nil {
+			for _, ex := range exchangeDirs {
+				if ex.IsDir() {
+					exchanges = append(exchanges, ex.Name())
+				}
+			}
 		}
+	} else {
+		exchanges = []string{params.Exchange}
+	}
 
-		// Scan each symbol
-		for _, symbol := range symbols {
-			for _, date := range dates {
-				for _, hour := range hours {
-					// Check if context is cancelled
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					default:
+	for _, exchange := range exchanges {
+		for _, sourceDir := range sourceDirs {
+			categoryPath := filepath.Join(fs.basePath, exchange, sourceDir, category)
+			symbols, err := fs.getSymbolsInCategory(categoryPath)
+			if err != nil {
+				fs.logger.Debug("Failed to get symbols", zap.String("path", categoryPath), zap.Error(err))
+				continue
+			}
+
+			for _, symbol := range symbols {
+				for _, date := range dates {
+					for _, hour := range hours {
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						default:
+						}
+
+						basePath := filepath.Join(categoryPath, symbol, fmt.Sprintf("dt=%s", date))
+						if hour != "" {
+							basePath = filepath.Join(basePath, fmt.Sprintf("hour=%s", hour))
+						}
+
+						files, err := fs.scanPath(basePath, params)
+						if err != nil {
+							continue
+						}
+
+						for i := range files {
+							files[i].Exchange = exchange
+							files[i].Source = normalizeSource(sourceDir)
+							files[i].Category = category
+							files[i].Symbol = symbol
+							files[i].Date = date
+							files[i].Hour = hour
+						}
+
+						allFiles = append(allFiles, files...)
 					}
-
-					// Build path
-					basePath := filepath.Join(categoryPath, symbol, fmt.Sprintf("dt=%s", date))
-					if hour != "" {
-						basePath = filepath.Join(basePath, fmt.Sprintf("hour=%s", hour))
-					}
-
-					// Scan this path
-					files, err := fs.scanPath(basePath, params)
-					if err != nil {
-						continue
-					}
-
-					// Set metadata
-					for i := range files {
-						files[i].Exchange = params.Exchange
-						files[i].Source = normalizeSource(sourceDir)
-						files[i].Category = category
-						files[i].Symbol = symbol
-						files[i].Date = date
-						files[i].Hour = hour
-					}
-
-					allFiles = append(allFiles, files...)
 				}
 			}
 		}

@@ -1,58 +1,37 @@
 package restapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
-	"golang.org/x/time/rate"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
-// BitfinexClient handles REST API calls to Bitfinex with rate limiting
+// BitfinexClient handles REST API calls to Bitfinex with rate limiting and
+// JSON persistence for configuration endpoints.
 type BitfinexClient struct {
-	baseURL    string
-	client     *http.Client
-	logger     *zap.Logger
-
-	// Rate limiters for different endpoints
-	confLimiter    *rate.Limiter  // 90 req/min
-	tickersLimiter *rate.Limiter  // 30 req/min
-	candlesLimiter *rate.Limiter  // 30 req/min
-	tradesLimiter  *rate.Limiter  // 15 req/min
-	bookLimiter    *rate.Limiter  // 240 req/min
-
-	// Arrow storage handler
-	arrowStorage *ArrowStorage
+	baseURL         string
+	client          *http.Client
+	logger          *zap.Logger
+	confLimiter     *rate.Limiter
+	storageBasePath string
 }
 
-// BaseDataOptions represents the checkable options for base data fetching
-type BaseDataOptions struct {
-	// Listings
-	SpotPairs      bool `json:"spot_pairs"`
-	MarginPairs    bool `json:"margin_pairs"`
-	FuturesPairs   bool `json:"futures_pairs"`
-	Currencies     bool `json:"currencies"`
-	MarginCurrencies bool `json:"margin_currencies"`
-
-	// Mappings
-	CurrencyLabels bool `json:"currency_labels"`
-	CurrencySymbols bool `json:"currency_symbols"`
-	CurrencyUnits  bool `json:"currency_units"`
-	CurrencyUnderlying bool `json:"currency_underlying"`
-
-	// Pair Info
-	PairInfo        bool `json:"pair_info"`
-	FuturesPairInfo bool `json:"futures_pair_info"`
-
-	// Active Snapshot
-	ActiveTickers bool `json:"active_tickers"`
+// EndpointTask describes a single REST configuration endpoint to fetch and persist.
+type EndpointTask struct {
+	Endpoint string
+	FileName string
 }
 
-// FetchResult represents the result of a fetch operation
+// FetchResult represents the outcome of a single endpoint fetch.
 type FetchResult struct {
 	Endpoint  string    `json:"endpoint"`
 	Success   bool      `json:"success"`
@@ -62,30 +41,58 @@ type FetchResult struct {
 	Count     int       `json:"count,omitempty"`
 }
 
-// NewBitfinexClient creates a new Bitfinex REST API client
-func NewBitfinexClient(logger *zap.Logger) *BitfinexClient {
+// NewBitfinexClient creates a new Bitfinex REST API client.
+func NewBitfinexClient(logger *zap.Logger, storageBasePath string) *BitfinexClient {
 	return &BitfinexClient{
-		baseURL: "https://api-pub.bitfinex.com/v2",
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
-		logger: logger,
-
-		// Rate limiters (using 80% of official limits for safety)
-		confLimiter:    rate.NewLimiter(rate.Every(time.Minute/72), 1),   // 72 req/min (80% of 90)
-		tickersLimiter: rate.NewLimiter(rate.Every(time.Minute/24), 1),   // 24 req/min (80% of 30)
-		candlesLimiter: rate.NewLimiter(rate.Every(time.Minute/24), 1),   // 24 req/min (80% of 30)
-		tradesLimiter:  rate.NewLimiter(rate.Every(time.Minute/12), 1),   // 12 req/min (80% of 15)
-		bookLimiter:    rate.NewLimiter(rate.Every(time.Minute/192), 1),  // 192 req/min (80% of 240)
-
-		// Initialize Arrow storage
-		arrowStorage: NewArrowStorage(logger),
+		baseURL:         "https://api-pub.bitfinex.com/v2",
+		client:          &http.Client{Timeout: 10 * time.Second},
+		logger:          logger,
+		confLimiter:     rate.NewLimiter(rate.Every(time.Minute/72), 1),
+		storageBasePath: storageBasePath,
 	}
 }
 
-// fetchConfList fetches configuration list from Bitfinex
-func (c *BitfinexClient) fetchConfList(ctx context.Context, key string) ([]string, error) {
-	// Wait for rate limit
+// FetchAndStoreJSON fetches the endpoint defined in task and writes the JSON
+// response to the configured storage location. The returned FetchResult includes
+// the resolved file path and a best-effort element count.
+func (c *BitfinexClient) FetchAndStoreJSON(ctx context.Context, exchange string, task EndpointTask) FetchResult {
+	result := FetchResult{
+		Endpoint:  task.Endpoint,
+		Timestamp: time.Now().UTC(),
+	}
+
+	body, err := c.fetchConfRaw(ctx, task.Endpoint)
+	if err != nil {
+		result.Error = err.Error()
+		c.logger.Error("Failed to fetch config endpoint",
+			zap.String("endpoint", task.Endpoint),
+			zap.Error(err))
+		return result
+	}
+
+	filePath, err := c.persistJSON(exchange, task.FileName, body)
+	if err != nil {
+		result.Error = err.Error()
+		c.logger.Error("Failed to persist config endpoint",
+			zap.String("endpoint", task.Endpoint),
+			zap.Error(err))
+		return result
+	}
+
+	result.FilePath = filePath
+	result.Success = true
+	result.Count = countTopLevelElements(body)
+
+	c.logger.Info("Config endpoint fetched",
+		zap.String("endpoint", task.Endpoint),
+		zap.String("file", filePath),
+		zap.Int("count", result.Count))
+
+	return result
+}
+
+// fetchConfRaw fetches the raw JSON response for a configuration endpoint.
+func (c *BitfinexClient) fetchConfRaw(ctx context.Context, key string) ([]byte, error) {
 	if err := c.confLimiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("rate limit wait failed: %w", err)
 	}
@@ -113,233 +120,67 @@ func (c *BitfinexClient) fetchConfList(ctx context.Context, key string) ([]strin
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Response is [["BTCUSD","ETHUSD",...]]
-	var outer [][]string
-	if err := json.Unmarshal(body, &outer); err != nil {
-		return nil, fmt.Errorf("decode failed: %w", err)
-	}
-
-	if len(outer) == 0 {
-		return nil, fmt.Errorf("empty response")
-	}
-
-	return outer[0], nil
+	return body, nil
 }
 
-// fetchTickers fetches all active tickers from Bitfinex
-func (c *BitfinexClient) fetchTickers(ctx context.Context) ([]interface{}, error) {
-	// Wait for rate limit
-	if err := c.tickersLimiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("rate limit wait failed: %w", err)
+func (c *BitfinexClient) persistJSON(exchange, fileName string, data []byte) (string, error) {
+	if c.storageBasePath == "" {
+		return "", fmt.Errorf("storage base path is not configured")
 	}
 
-	url := fmt.Sprintf("%s/tickers?symbols=ALL", c.baseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
+	if exchange == "" {
+		exchange = "bitfinex"
 	}
 
-	req.Header.Set("User-Agent", "trade-engine-data-controller/1.0")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	dir := filepath.Join(c.storageBasePath, exchange, "restapi", "config")
+	if err := createDirIfNotExists(dir); err != nil {
+		return "", err
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	if fileName == "" {
+		fileName = "config.json"
 	}
 
-	var tickers []interface{}
-	if err := json.Unmarshal(body, &tickers); err != nil {
-		return nil, fmt.Errorf("decode failed: %w", err)
+	path := filepath.Join(dir, sanitizeFileName(fileName))
+
+	var pretty bytes.Buffer
+	if json.Valid(data) {
+		if err := json.Indent(&pretty, data, "", "  "); err != nil {
+			pretty.Write(data)
+		}
+	} else {
+		pretty.Write(data)
 	}
 
-	return tickers, nil
+	if err := writeFile(path, pretty.Bytes()); err != nil {
+		return "", err
+	}
+
+	return path, nil
 }
 
-// FetchBaseData fetches base data according to the specified options
-func (c *BitfinexClient) FetchBaseData(ctx context.Context, options BaseDataOptions, onProgress func(result FetchResult)) error {
-	results := []FetchResult{}
-
-	c.logger.Info("Starting Bitfinex base data fetch", zap.Any("options", options))
-
-	// Create storage directory
-	storageDir := "data/bitfinex/restapi/basedata"
-	timestamp := time.Now().UTC()
-	timestampStr := timestamp.Format("20060102T150405Z")
-
-	// Fetch listings
-	if options.SpotPairs {
-		result := c.fetchAndSave(ctx, "pub:list:pair:exchange", "conf-list-pair-exchange", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
+func sanitizeFileName(name string) string {
+	cleaned := strings.ReplaceAll(name, ":", "_")
+	cleaned = strings.ReplaceAll(cleaned, " ", "_")
+	cleaned = strings.ReplaceAll(cleaned, "-", "_")
+	for strings.Contains(cleaned, "__") {
+		cleaned = strings.ReplaceAll(cleaned, "__", "_")
 	}
-
-	if options.MarginPairs {
-		result := c.fetchAndSave(ctx, "pub:list:pair:margin", "conf-list-pair-margin", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	if options.FuturesPairs {
-		result := c.fetchAndSave(ctx, "pub:list:pair:futures", "conf-list-pair-futures", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	if options.Currencies {
-		result := c.fetchAndSave(ctx, "pub:list:currency", "conf-list-currency", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	if options.MarginCurrencies {
-		result := c.fetchAndSave(ctx, "pub:list:currency:margin", "conf-list-currency-margin", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	// Fetch mappings
-	if options.CurrencyLabels {
-		result := c.fetchAndSave(ctx, "pub:map:currency:label", "conf-map-currency-label", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	if options.CurrencySymbols {
-		result := c.fetchAndSave(ctx, "pub:map:currency:sym", "conf-map-currency-sym", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	if options.CurrencyUnits {
-		result := c.fetchAndSave(ctx, "pub:map:currency:unit", "conf-map-currency-unit", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	if options.CurrencyUnderlying {
-		result := c.fetchAndSave(ctx, "pub:map:currency:undl", "conf-map-currency-undl", timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	// Fetch active tickers
-	if options.ActiveTickers {
-		result := c.fetchTickersAndSave(ctx, timestampStr, storageDir)
-		results = append(results, result)
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	// Log summary
-	successCount := 0
-	for _, result := range results {
-		if result.Success {
-			successCount++
-		}
-	}
-
-	c.logger.Info("Bitfinex base data fetch completed",
-		zap.Int("total", len(results)),
-		zap.Int("success", successCount),
-		zap.Int("failed", len(results)-successCount))
-
-	return nil
+	return cleaned
 }
 
-// Helper function to fetch config data and save to file
-func (c *BitfinexClient) fetchAndSave(ctx context.Context, confKey, filePrefix, timestamp, storageDir string) FetchResult {
-	result := FetchResult{
-		Endpoint:  confKey,
-		Timestamp: time.Now().UTC(),
+func countTopLevelElements(data []byte) int {
+	var generic interface{}
+	if err := json.Unmarshal(data, &generic); err != nil {
+		return 0
 	}
 
-	// Fetch data
-	data, err := c.fetchConfList(ctx, confKey)
-	if err != nil {
-		result.Error = err.Error()
-		c.logger.Error("Failed to fetch config", zap.String("key", confKey), zap.Error(err))
-		return result
+	switch typed := generic.(type) {
+	case []interface{}:
+		return len(typed)
+	case map[string]interface{}:
+		return len(typed)
+	default:
+		return 1
 	}
-
-	// Save to Arrow file
-	filePath, err := c.arrowStorage.SaveBaseDataAsArrow(data, confKey, "bitfinex", result.Timestamp)
-	if err != nil {
-		result.Error = err.Error()
-		c.logger.Error("Failed to save config", zap.String("key", confKey), zap.Error(err))
-		return result
-	}
-
-	result.Success = true
-	result.FilePath = filePath
-	result.Count = len(data)
-
-	c.logger.Info("Successfully fetched and saved config",
-		zap.String("key", confKey),
-		zap.String("file", filePath),
-		zap.Int("count", len(data)))
-
-	return result
 }
-
-// Helper function to fetch tickers and save to file
-func (c *BitfinexClient) fetchTickersAndSave(ctx context.Context, timestamp, storageDir string) FetchResult {
-	result := FetchResult{
-		Endpoint:  "tickers?symbols=ALL",
-		Timestamp: time.Now().UTC(),
-	}
-
-	// Fetch data
-	data, err := c.fetchTickers(ctx)
-	if err != nil {
-		result.Error = err.Error()
-		c.logger.Error("Failed to fetch tickers", zap.Error(err))
-		return result
-	}
-
-	// Save to Arrow file
-	filePath, err := c.arrowStorage.SaveBaseDataAsArrow(data, "tickers", "bitfinex", result.Timestamp)
-	if err != nil {
-		result.Error = err.Error()
-		c.logger.Error("Failed to save tickers", zap.Error(err))
-		return result
-	}
-
-	result.Success = true
-	result.FilePath = filePath
-	result.Count = len(data)
-
-	c.logger.Info("Successfully fetched and saved tickers",
-		zap.String("file", filePath),
-		zap.Int("count", len(data)))
-
-	return result
-}
-

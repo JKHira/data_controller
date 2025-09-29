@@ -8,15 +8,21 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 	"go.uber.org/zap"
+	"image/color"
 
 	"github.com/trade-engine/data-controller/internal/config"
 	"github.com/trade-engine/data-controller/internal/gui"
 	"github.com/trade-engine/data-controller/internal/gui/controllers"
 	"github.com/trade-engine/data-controller/internal/gui/panels"
 	"github.com/trade-engine/data-controller/internal/gui/state"
+	"github.com/trade-engine/data-controller/internal/restapi"
+	"github.com/trade-engine/data-controller/internal/services"
 	arrowsink "github.com/trade-engine/data-controller/internal/sink/arrow"
 	"github.com/trade-engine/data-controller/internal/ws"
 )
@@ -41,11 +47,15 @@ type Application struct {
 	viewerPanel *panels.ViewerPanel
 
 	// Services
-	arrowReader       *arrowsink.FileReader
-	arrowHandler      *arrowsink.Handler
-	connectionManager *ws.ConnectionManager
-	liveStreamData    *gui.LiveStreamData
-	isRunning         bool
+	arrowReader          *arrowsink.FileReader
+	arrowHandler         *arrowsink.Handler
+	connectionManager    *ws.ConnectionManager
+	liveStreamData       *gui.LiveStreamData
+	isRunning            bool
+	activeExchange       string
+	configRefreshManager *services.ConfigRefreshManager
+	configRefreshCancel  context.CancelFunc
+	configStatusTimer    *time.Timer
 
 	// Context and lifecycle
 	ctx    context.Context
@@ -89,22 +99,30 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 	// Initialize live stream data
 	liveStreamData := gui.NewLiveStreamData(20)
 
+	var refreshManager *services.ConfigRefreshManager
+	if mgr, err := services.NewConfigRefreshManager(cfg, logger); err != nil {
+		logger.Warn("Failed to initialise config refresh manager", zap.Error(err))
+	} else {
+		refreshManager = mgr
+	}
+
 	return &Application{
-		logger:            logger,
-		cfg:               cfg,
-		fyneApp:           fyneApp,
-		window:            window,
-		ctx:               ctx,
-		cancel:            cancel,
-		state:             appState,
-		fileController:    fileController,
-		filesPanel:        filesPanel,
-		viewerPanel:       viewerPanel,
-		arrowReader:       arrowReader,
-		arrowHandler:      arrowHandler,
-		connectionManager: connectionManager,
-		liveStreamData:    liveStreamData,
-		isRunning:         false,
+		logger:               logger,
+		cfg:                  cfg,
+		fyneApp:              fyneApp,
+		window:               window,
+		ctx:                  ctx,
+		cancel:               cancel,
+		state:                appState,
+		fileController:       fileController,
+		filesPanel:           filesPanel,
+		viewerPanel:          viewerPanel,
+		arrowReader:          arrowReader,
+		arrowHandler:         arrowHandler,
+		connectionManager:    connectionManager,
+		liveStreamData:       liveStreamData,
+		isRunning:            false,
+		configRefreshManager: refreshManager,
 	}
 }
 
@@ -113,6 +131,7 @@ func (a *Application) Initialize() error {
 	// Initialize status bindings
 	a.state.StatusBinding.Set("💤 Disconnected")
 	a.state.StatsBinding.Set("Statistics:\nTickers: 0\nTrades: 0\nBook Levels: 0\nErrors: 0")
+	a.state.ConfigStatusBinding.Set("Config: Ready")
 
 	// Create main layout
 	a.createLayout()
@@ -134,49 +153,37 @@ func (a *Application) createLayout() {
 	// Top bar - status only (using modular component)
 	topBar := gui.CreateTopBar(a.state.StatusBinding)
 
-	// New Exchange Panes (WebSocket + REST API) - replaces statsCard
-	exchangePanes := gui.BuildExchangePanesWithHandlers(
-		func(connected bool) {
-			if connected {
-				a.handleConnect()
-			} else {
-				a.handleDisconnect()
-			}
-		},
-		func(connected bool) {
-			// REST API handler - TODO: implement REST API functionality
-			if connected {
-				a.logger.Info("REST API Connect requested")
-			} else {
-				a.logger.Info("REST API Disconnect requested")
-			}
-		},
-		a.logger, // Pass logger for REST API functionality
+	wsPane, restPane := gui.BuildExchangePanesWithHandlers(
+		a.cfg,
+		a.handleWsConnect,
+		a.handleWsDisconnect,
+		a.configRefreshManager,
+		a.publishConfigStatus,
+		a.logger,
 	)
 
-	// Right panel: File browser and viewer (using modular components)
-	// Data Files panel
 	filesCard := a.filesPanel.GetContent()
-
-	// File viewer panel
 	fileViewerCard := a.viewerPanel.GetContent()
+	controlPanel := widget.NewCard("Controls", "", container.NewVBox())
 
-	// Right side - file browser and viewer
-	rightPanel := container.NewVSplit(
-		filesCard,
-		fileViewerCard,
+	wrapColumn := func(obj fyne.CanvasObject, width float32) fyne.CanvasObject {
+		background := canvas.NewRectangle(color.Transparent)
+		background.SetMinSize(fyne.NewSize(width, obj.MinSize().Height))
+		return container.NewMax(background, obj)
+	}
+
+	columns := container.New(layout.NewHBoxLayout(),
+		wrapColumn(wsPane, 380),
+		wrapColumn(restPane, 380),
+		wrapColumn(filesCard, 380),
+		wrapColumn(fileViewerCard, 380),
+		wrapColumn(controlPanel, 780),
 	)
-	rightPanel.SetOffset(0.5) // 50/50 split
 
-	// Main content - left and right panels
-	mainContent := container.NewHSplit(
-		exchangePanes,
-		rightPanel,
-	)
-	mainContent.SetOffset(0.6) // 60% left, 40% right
+	mainContent := container.NewHScroll(columns)
 
-	// Bottom bar - live stream (using modular component)
-	bottomBar := gui.CreateBottomBar(a.cfg.Symbols, a.cfg.Storage.BasePath)
+	// Bottom bar - configuration activity
+	bottomBar := gui.CreateBottomBar(a.state.ConfigStatusBinding)
 
 	// Final layout
 	content := container.NewBorder(
@@ -194,40 +201,80 @@ func (a *Application) Run() {
 	a.window.ShowAndRun()
 }
 
-// handleConnect handles WebSocket connection
-func (a *Application) handleConnect() {
-	a.logger.Info("GUI: Connect button clicked")
+// handleWsConnect handles WebSocket connection requests for a specific exchange
+func (a *Application) handleWsConnect(exchange string, symbols []string) error {
+	a.logger.Info("GUI: WebSocket connect requested",
+		zap.String("exchange", exchange),
+		zap.Int("symbol_count", len(symbols)))
 
 	if a.isRunning {
-		a.logger.Warn("Already connected")
-		return
+		err := fmt.Errorf("websocket already connected")
+		a.logger.Warn("Connect request ignored: already connected",
+			zap.String("active_exchange", a.activeExchange))
+		return err
 	}
 
-	go func() {
-		if err := a.connectionManager.Start(); err != nil {
-			a.logger.Error("Failed to connect", zap.Error(err))
-			a.state.StatusBinding.Set("❌ Connection failed")
-		} else {
-			a.isRunning = true
-			a.state.SetConnected(true)
-			a.state.StatusBinding.Set("🟢 Connected")
-		}
-	}()
+	if len(symbols) == 0 {
+		err := fmt.Errorf("no symbols selected")
+		a.logger.Warn("Connect request ignored: no symbols selected")
+		return err
+	}
+
+	if err := a.connectionManager.StartWithSymbols(symbols); err != nil {
+		a.logger.Error("Failed to establish WebSocket connection", zap.Error(err))
+		a.state.StatusBinding.Set("❌ Connection failed")
+		return err
+	}
+
+	a.isRunning = true
+	a.activeExchange = exchange
+	a.state.SetConnected(true)
+	a.state.StatusBinding.Set(fmt.Sprintf("🟢 %s Connected", exchange))
+
+	if a.configRefreshCancel != nil {
+		a.configRefreshCancel()
+	}
+
+	a.ensureConfigFreshness(exchange, true)
+
+	if a.configRefreshManager != nil {
+		ctx, cancel := context.WithCancel(a.ctx)
+		a.configRefreshCancel = cancel
+		go a.configRefreshLoop(ctx, exchange)
+	}
+
+	return nil
 }
 
-// handleDisconnect handles WebSocket disconnection
-func (a *Application) handleDisconnect() {
-	a.logger.Info("GUI: Disconnect button clicked")
+// handleWsDisconnect handles WebSocket disconnection requests for a specific exchange
+func (a *Application) handleWsDisconnect(exchange string) error {
+	a.logger.Info("GUI: WebSocket disconnect requested",
+		zap.String("exchange", exchange))
 
 	if !a.isRunning {
-		a.logger.Warn("Not connected")
-		return
+		err := fmt.Errorf("websocket not connected")
+		a.logger.Warn("Disconnect request ignored: no active connection")
+		return err
+	}
+
+	if a.activeExchange != "" && a.activeExchange != exchange {
+		a.logger.Warn("Disconnect request for non-active exchange",
+			zap.String("active_exchange", a.activeExchange),
+			zap.String("requested_exchange", exchange))
 	}
 
 	a.connectionManager.Stop()
 	a.isRunning = false
+	a.activeExchange = ""
 	a.state.SetConnected(false)
 	a.state.StatusBinding.Set("💤 Disconnected")
+
+	if a.configRefreshCancel != nil {
+		a.configRefreshCancel()
+		a.configRefreshCancel = nil
+	}
+
+	return nil
 }
 
 // handleFilterFiles handles file filtering
@@ -244,6 +291,12 @@ func (a *Application) handleWindowClose() {
 	if a.isRunning {
 		a.connectionManager.Stop()
 		a.isRunning = false
+	}
+
+	// Stop config status timer
+	if a.configStatusTimer != nil {
+		a.configStatusTimer.Stop()
+		a.configStatusTimer = nil
 	}
 
 	// Cancel context and wait for goroutines
@@ -277,7 +330,11 @@ func (a *Application) statusUpdater() {
 // updateStatus updates the application status
 func (a *Application) updateStatus() {
 	if a.isRunning {
-		a.state.StatusBinding.Set("🟢 Connected")
+		status := "🟢 Connected"
+		if a.activeExchange != "" {
+			status = fmt.Sprintf("🟢 %s Connected", a.activeExchange)
+		}
+		a.state.StatusBinding.Set(status)
 	} else {
 		a.state.StatusBinding.Set("💤 Disconnected")
 	}
@@ -294,4 +351,72 @@ func (a *Application) updateStatus() {
 			a.state.StatsBinding.Set(statsText)
 		}
 	}
+}
+
+func (a *Application) ensureConfigFreshness(exchange string, includeOptional bool) {
+	if a.configRefreshManager == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
+	defer cancel()
+
+	results, err := a.configRefreshManager.EnsureFreshness(ctx, exchange, includeOptional)
+	if err != nil {
+		a.logger.Warn("Config refresh check failed", zap.Error(err))
+	}
+
+	a.handleConfigResults(exchange, results)
+}
+
+func (a *Application) configRefreshLoop(ctx context.Context, exchange string) {
+	ticker := time.NewTicker(45 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.ensureConfigFreshness(exchange, false)
+		}
+	}
+}
+
+func (a *Application) handleConfigResults(exchange string, results []restapi.FetchResult) {
+	if len(results) == 0 {
+		return
+	}
+
+	message := services.SummarizeResults(exchange, results)
+	if message != "" {
+		a.publishConfigStatus(message)
+	}
+}
+
+func (a *Application) publishConfigStatus(message string) {
+	if message == "" {
+		if a.configStatusTimer != nil {
+			a.configStatusTimer.Stop()
+			a.configStatusTimer = nil
+		}
+		fyne.Do(func() {
+			a.state.ConfigStatusBinding.Set("Config: Ready")
+		})
+		return
+	}
+
+	if a.configStatusTimer != nil {
+		a.configStatusTimer.Stop()
+	}
+
+	fyne.Do(func() {
+		a.state.ConfigStatusBinding.Set("Config: " + message)
+	})
+
+	a.configStatusTimer = time.AfterFunc(3*time.Minute, func() {
+		fyne.Do(func() {
+			a.state.ConfigStatusBinding.Set("Config: Ready")
+		})
+	})
 }

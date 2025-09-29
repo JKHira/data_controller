@@ -1,0 +1,93 @@
+# Global application configuration
+application:
+  name: "data-controller"
+  version: "1.0.0"
+  log_level: "debug" # debug, info, warn, error
+
+# Data storage configuration
+storage:
+  base_path: "/Volumes/SSD/AI/Trade/TradeEngine2/data_controller/data"
+  segment_size_mb: 256 # Create new folder every 256MB
+  compression: "zstd" # zstd, gzip, snappy
+  compression_level: 3
+
+  # Parquet writer settings
+  parquet:
+    row_group_size_mb: 64
+    flush_interval: "5s"
+    flush_row_count: 10000
+
+  # WAL (Write-Ahead Log) settings - for audit and recovery
+  wal:
+    enabled: true
+    compression: "zstd"
+    retention_hours: 24
+
+# Metadata and schema settings
+metadata:
+  schema_version: "bfx.v1"
+  include_checksum_validation: true
+  include_sequence_numbers: true
+  include_timestamps: true
+
+# Monitoring and metrics
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+
+  health_check:
+    enabled: true
+    port: 8080
+    path: "/health"
+
+  logging:
+    format: "json" # json, text
+    output: "stdout" # stdout, file
+    file_path: "/var/log/data-controller.log"
+
+# GUI settings
+gui:
+  title: "Data Controller"
+  width: 800
+  height: 600
+  theme: "dark" # dark, light
+  auto_start: false
+  show_statistics: true
+  refresh_interval: "1s"
+
+# Performance and reliability settings
+performance:
+  buffer_size: 100000
+  worker_count: 4
+  max_memory_mb: 2048
+  gc_interval: "30s"
+
+  # Circuit breaker settings
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout: "30s"
+
+# Development and debugging
+debug:
+  enable_profiling: false
+  profiling_port: 6060
+  verbose_logging: false
+  save_raw_messages: true
+  simulate_network_issues: false
+
+# Exchange profile registry
+exchanges:
+  default: "bitfinex"
+  entries:
+    bitfinex:
+      default_profile: "default"
+      active_profile: "default"
+      last_used_profile: "default"
+      profiles:
+        default:
+          path: "bitfinex_config.yml"
+          description: "Default Bitfinex configuration"
+          is_default: true

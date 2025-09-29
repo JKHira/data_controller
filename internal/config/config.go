@@ -1,23 +1,36 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
+// Config represents the merged runtime configuration that combines
+// global application settings with the currently active exchange profile.
 type Config struct {
-	Application Application `yaml:"application"`
-	WebSocket   WebSocket   `yaml:"websocket"`
-	Symbols     []string    `yaml:"symbols"`
-	Channels    Channels    `yaml:"channels"`
-	Storage     Storage     `yaml:"storage"`
-	Metadata    Metadata    `yaml:"metadata"`
-	Monitoring  Monitoring  `yaml:"monitoring"`
-	GUI         GUI         `yaml:"gui"`
-	Performance Performance `yaml:"performance"`
-	Debug       Debug       `yaml:"debug"`
+	Application Application
+	Storage     Storage
+	Metadata    Metadata
+	Monitoring  Monitoring
+	GUI         GUI
+	Performance Performance
+	Debug       Debug
+
+	WebSocket WebSocket
+	Symbols   []string
+	Channels  Channels
+
+	ActiveExchange     string
+	ActiveProfile      string
+	GlobalConfigPath   string
+	ExchangeConfigPath string
+	StatePath          string
+
+	Exchanges ExchangesDefinition
 }
 
 type Application struct {
@@ -83,9 +96,9 @@ type ParquetConfig struct {
 }
 
 type WALConfig struct {
-	Enabled          bool `yaml:"enabled"`
-	Compression      string `yaml:"compression"`
-	RetentionHours   int `yaml:"retention_hours"`
+	Enabled        bool   `yaml:"enabled"`
+	Compression    string `yaml:"compression"`
+	RetentionHours int    `yaml:"retention_hours"`
 }
 
 type Metadata struct {
@@ -102,8 +115,8 @@ type Monitoring struct {
 }
 
 type PrometheusConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Port    int  `yaml:"port"`
+	Enabled bool   `yaml:"enabled"`
+	Port    int    `yaml:"port"`
 	Path    string `yaml:"path"`
 }
 
@@ -130,11 +143,11 @@ type GUI struct {
 }
 
 type Performance struct {
-	BufferSize      int               `yaml:"buffer_size"`
-	WorkerCount     int               `yaml:"worker_count"`
-	MaxMemoryMB     int               `yaml:"max_memory_mb"`
-	GCInterval      time.Duration     `yaml:"gc_interval"`
-	CircuitBreaker  CircuitBreakerConfig `yaml:"circuit_breaker"`
+	BufferSize     int                  `yaml:"buffer_size"`
+	WorkerCount    int                  `yaml:"worker_count"`
+	MaxMemoryMB    int                  `yaml:"max_memory_mb"`
+	GCInterval     time.Duration        `yaml:"gc_interval"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
 }
 
 type CircuitBreakerConfig struct {
@@ -151,25 +164,140 @@ type Debug struct {
 	SimulateNetworkIssues bool `yaml:"simulate_network_issues"`
 }
 
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
+// ExchangesDefinition tracks available exchanges and their profile metadata.
+type ExchangesDefinition struct {
+	Default string                      `yaml:"default"`
+	Entries map[string]ExchangeSettings `yaml:"entries"`
 }
 
-func (c *Config) Save(path string) error {
-	data, err := yaml.Marshal(c)
+// ExchangeSettings defines profile management information for a single exchange.
+type ExchangeSettings struct {
+	DefaultProfile  string                     `yaml:"default_profile"`
+	ActiveProfile   string                     `yaml:"active_profile"`
+	LastUsedProfile string                     `yaml:"last_used_profile"`
+	Profiles        map[string]ExchangeProfile `yaml:"profiles"`
+}
+
+// ExchangeProfile describes a concrete profile location.
+type ExchangeProfile struct {
+	Path        string `yaml:"path"`
+	Description string `yaml:"description,omitempty"`
+	IsDefault   bool   `yaml:"is_default,omitempty"`
+}
+
+// exchangeProfileConfig represents the on-disk structure for an individual exchange profile.
+type exchangeProfileConfig struct {
+	WebSocket WebSocket `yaml:"websocket"`
+	Symbols   []string  `yaml:"symbols"`
+	Channels  Channels  `yaml:"channels"`
+}
+
+// globalConfig mirrors the persisted global configuration file.
+type globalConfig struct {
+	Application Application         `yaml:"application"`
+	Storage     Storage             `yaml:"storage"`
+	Metadata    Metadata            `yaml:"metadata"`
+	Monitoring  Monitoring          `yaml:"monitoring"`
+	GUI         GUI                 `yaml:"gui"`
+	Performance Performance         `yaml:"performance"`
+	Debug       Debug               `yaml:"debug"`
+	Exchanges   ExchangesDefinition `yaml:"exchanges"`
+}
+
+// Load reads the global configuration file, resolves the active exchange profile,
+// and returns a combined runtime configuration.
+func Load(globalPath string) (*Config, error) {
+	bytes, err := os.ReadFile(globalPath)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("read global config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0644)
+	var globalCfg globalConfig
+	if err := yaml.Unmarshal(bytes, &globalCfg); err != nil {
+		return nil, fmt.Errorf("unmarshal global config: %w", err)
+	}
+
+	if globalCfg.Exchanges.Entries == nil || len(globalCfg.Exchanges.Entries) == 0 {
+		return nil, fmt.Errorf("no exchanges configured in %s", globalPath)
+	}
+
+	activeExchange := globalCfg.Exchanges.Default
+	if activeExchange == "" {
+		for name := range globalCfg.Exchanges.Entries {
+			activeExchange = name
+			break
+		}
+	}
+	exchangeSettings, ok := globalCfg.Exchanges.Entries[activeExchange]
+	if !ok {
+		return nil, fmt.Errorf("default exchange %q not found", activeExchange)
+	}
+
+	profileName := exchangeSettings.ActiveProfile
+	if profileName == "" {
+		profileName = exchangeSettings.LastUsedProfile
+	}
+	if profileName == "" {
+		profileName = exchangeSettings.DefaultProfile
+	}
+	if profileName == "" {
+		for name := range exchangeSettings.Profiles {
+			profileName = name
+			break
+		}
+	}
+	if profileName == "" {
+		return nil, fmt.Errorf("no profiles available for exchange %s", activeExchange)
+	}
+
+	profile, ok := exchangeSettings.Profiles[profileName]
+	if !ok {
+		return nil, fmt.Errorf("profile %q not defined for exchange %s", profileName, activeExchange)
+	}
+	if profile.Path == "" {
+		return nil, fmt.Errorf("profile %q for exchange %s has empty path", profileName, activeExchange)
+	}
+
+	profilePath := profile.Path
+	if !filepath.IsAbs(profilePath) {
+		profilePath = filepath.Join(filepath.Dir(globalPath), profilePath)
+	}
+
+	profileBytes, err := os.ReadFile(profilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read exchange profile %s: %w", profilePath, err)
+	}
+
+	var profileCfg exchangeProfileConfig
+	if err := yaml.Unmarshal(profileBytes, &profileCfg); err != nil {
+		return nil, fmt.Errorf("unmarshal exchange profile %s: %w", profilePath, err)
+	}
+
+	runtime := &Config{
+		Application: globalCfg.Application,
+		Storage:     globalCfg.Storage,
+		Metadata:    globalCfg.Metadata,
+		Monitoring:  globalCfg.Monitoring,
+		GUI:         globalCfg.GUI,
+		Performance: globalCfg.Performance,
+		Debug:       globalCfg.Debug,
+		WebSocket:   profileCfg.WebSocket,
+		Symbols:     append([]string(nil), profileCfg.Symbols...),
+		Channels:    profileCfg.Channels,
+
+		ActiveExchange:     activeExchange,
+		ActiveProfile:      profileName,
+		GlobalConfigPath:   globalPath,
+		ExchangeConfigPath: profilePath,
+		StatePath:          filepath.Join(filepath.Dir(globalPath), "state.yml"),
+		Exchanges:          globalCfg.Exchanges,
+	}
+
+	return runtime, nil
+}
+
+// Save is intentionally unsupported for the merged configuration to
+// prevent accidental writes that discard profile metadata.
+func (c *Config) Save(string) error {
+	return fmt.Errorf("saving the merged configuration is not supported; update global and exchange profile files explicitly")
 }

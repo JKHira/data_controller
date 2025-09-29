@@ -32,30 +32,31 @@ type FilesPanel struct {
 	window         fyne.Window
 
 	// Filter controls
-	sourceSelect    *widget.Select
-	categorySelect  *widget.Select
-	symbolSelect    *widget.Select
-	dateFromPicker  *widget.DateEntry
-	dateToPicker    *widget.DateEntry
-	hourSelect      *widget.Select
-	typeSelect      *widget.Select
+	exchangeSelect *widget.Select
+	sourceSelect   *widget.Select
+	categorySelect *widget.Select
+	symbolSelect   *widget.Select
+	dateFromPicker *widget.DateEntry
+	dateToPicker   *widget.DateEntry
+	hourSelect     *widget.Select
+	typeSelect     *widget.Select
 	// filterEntry removed - filename filter not needed
 
 	// State for symbol selection
 	symbolRemember string
 
 	// Action buttons
-	scanBtn        *widget.Button
-	loadBtn        *widget.Button
+	scanBtn *widget.Button
+	loadBtn *widget.Button
 
 	// Results
-	filesList      *widget.List
-	statusLabel    *widget.Label
+	filesList   *widget.List
+	statusLabel *widget.Label
 
 	// Async control
-	scanCtx        context.Context
-	scanCancel     context.CancelFunc
-	isScanning     bool
+	scanCtx    context.Context
+	scanCancel context.CancelFunc
+	isScanning bool
 }
 
 // Source aliases for backward compatibility
@@ -89,6 +90,10 @@ func NewFilesPanel(logger *zap.Logger, cfg *config.Config, appState *state.AppSt
 
 // createUI creates the files panel UI components with full filtering
 func (fp *FilesPanel) createUI() {
+	// Exchange selector (defaults to active exchange, allows ALL)
+	options := fp.exchangeOptions()
+	fp.exchangeSelect = widget.NewSelect(options, nil)
+
 	// Filter controls
 	fp.sourceSelect = widget.NewSelect([]string{"websocket", "restapi"}, nil)
 	fp.sourceSelect.SetSelected("websocket")
@@ -102,6 +107,16 @@ func (fp *FilesPanel) createUI() {
 	fp.symbolSelect.PlaceHolder = "Select symbol..."
 	fp.symbolSelect.OnChanged = func(selected string) {
 		fp.symbolRemember = selected
+	}
+
+	fp.exchangeSelect.OnChanged = func(string) {
+		fp.refreshSymbols()
+	}
+
+	if fp.cfg.ActiveExchange != "" {
+		fp.exchangeSelect.SetSelected(fp.cfg.ActiveExchange)
+	} else {
+		fp.exchangeSelect.SetSelected(options[0])
 	}
 
 	// Date pickers with year selection (Fyne v2.6 DateEntry)
@@ -162,10 +177,22 @@ func (fp *FilesPanel) createUI() {
 	fp.filesList.OnSelected = fp.handleFileSelection
 }
 
+func (fp *FilesPanel) exchangeOptions() []string {
+	entries := fp.cfg.Exchanges.Entries
+	list := make([]string, 0, len(entries)+1)
+	list = append(list, "ALL")
+	for name := range entries {
+		list = append(list, name)
+	}
+	sort.Strings(list[1:])
+	return list
+}
+
 // GetContent returns the complete files panel with all controls
 func (fp *FilesPanel) GetContent() fyne.CanvasObject {
 	// Filter controls grid
 	filterForm := container.NewGridWithColumns(2,
+		widget.NewLabel("Exchange:"), fp.exchangeSelect,
 		widget.NewLabel("Source:"), fp.sourceSelect,
 		widget.NewLabel("Category:"), fp.categorySelect,
 		widget.NewLabel("Symbol:"), fp.symbolSelect,
@@ -212,15 +239,26 @@ func (fp *FilesPanel) handleScan() {
 	symbol := fp.symbolSelect.Selected
 	if strings.HasPrefix(fp.categorySelect.Selected, "All ") {
 		symbol = "ALL"
+	} else if strings.EqualFold(symbol, "no data") {
+		fp.state.FilteredFiles = nil
+		fp.filesList.Refresh()
+		fp.statusLabel.SetText("No symbols found under the selected category.")
+		return
 	} else if symbol == "" {
 		fp.showError("Please select a symbol")
 		return
 	}
 
+	// Determine exchange selection
+	exchangeSelection := fp.exchangeSelect.Selected
+	if exchangeSelection == "" {
+		exchangeSelection = "ALL"
+	}
+
 	// Prepare scan parameters (Filter removed as requested)
 	params := domain.ScanParams{
 		BasePath: fp.cfg.Storage.BasePath,
-		Exchange: "ALL", // Support multiple exchanges in data/ directory
+		Exchange: exchangeSelection,
 		Source:   fp.sourceSelect.Selected,
 		Category: fp.categorySelect.Selected,
 		Symbol:   symbol,
@@ -329,12 +367,13 @@ func (fp *FilesPanel) onCategoryChanged(selected string) {
 func (fp *FilesPanel) refreshSymbols() {
 	src := fp.sourceSelect.Selected
 	cat := fp.categorySelect.Selected
+	exchange := fp.exchangeSelect.Selected
 
 	if src == "" || cat == "" {
 		return
 	}
 
-	// All books / All trades のときはシンボル一覧を使わない
+	// "All ..." のときはシンボル一覧を使わない
 	if strings.HasPrefix(cat, "All ") {
 		fp.ui(func() {
 			fp.symbolSelect.SetOptions([]string{"ALL"})
@@ -345,13 +384,30 @@ func (fp *FilesPanel) refreshSymbols() {
 	}
 
 	go func() {
-		// 多取引所対応: data/ 直下の全取引所を走査
 		syms := make(map[string]struct{})
-		dataRoot := filepath.Join(fp.cfg.Storage.BasePath, "data")
+		dataRoot := fp.cfg.Storage.BasePath
 
-		// Get all exchanges (bitfinex, otherexchange, etc.)
-		exchanges, err := os.ReadDir(dataRoot)
-		if err != nil {
+		var exchanges []string
+		if strings.EqualFold(exchange, "ALL") || exchange == "" {
+			dirs, err := os.ReadDir(dataRoot)
+			if err != nil {
+				fp.ui(func() {
+					fp.symbolSelect.SetOptions([]string{"no data"})
+					fp.symbolSelect.SetSelected("no data")
+					fp.symbolSelect.Disable()
+				})
+				return
+			}
+			for _, entry := range dirs {
+				if entry.IsDir() {
+					exchanges = append(exchanges, entry.Name())
+				}
+			}
+		} else {
+			exchanges = []string{exchange}
+		}
+
+		if len(exchanges) == 0 {
 			fp.ui(func() {
 				fp.symbolSelect.SetOptions([]string{"no data"})
 				fp.symbolSelect.SetSelected("no data")
@@ -361,13 +417,9 @@ func (fp *FilesPanel) refreshSymbols() {
 		}
 
 		for _, ex := range exchanges {
-			if !ex.IsDir() {
-				continue
-			}
-
 			// Check all source aliases (websocket, ws, v2, restapi, restv2)
 			for _, alias := range sourceAliases[src] {
-				base := filepath.Join(dataRoot, ex.Name(), alias, cat)
+				base := filepath.Join(dataRoot, ex, alias, cat)
 				entries, err := os.ReadDir(base)
 				if err != nil {
 					continue // Skip if directory doesn't exist

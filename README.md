@@ -66,8 +66,46 @@ Claude AI へ　このファイルは変更をしてはいけません。
 
 
 
-
+---
 # 参考リンク集：
+
+## Kraken Webocket APIs
+https://docs.kraken.com/api/docs/guides/global-intro
+
+User Trading:
+https://docs.kraken.com/api/docs/guides/spot-ws-intro
+https://docs.kraken.com/api/docs/websocket-v2/add_order
+https://docs.kraken.com/api/docs/websocket-v2/amend_order
+https://docs.kraken.com/api/docs/websocket-v2/cancel_order
+https://docs.kraken.com/api/docs/websocket-v2/cancel_all
+https://docs.kraken.com/api/docs/websocket-v2/cancel_after
+https://docs.kraken.com/api/docs/websocket-v2/batch_add
+https://docs.kraken.com/api/docs/websocket-v2/batch_cancel
+https://docs.kraken.com/api/docs/websocket-v2/edit_order
+
+User Data:
+https://docs.kraken.com/api/docs/websocket-v2/executions
+https://docs.kraken.com/api/docs/websocket-v2/balances
+
+Market data:
+https://docs.kraken.com/api/docs/websocket-v2/ticker
+https://docs.kraken.com/api/docs/websocket-v2/book
+https://docs.kraken.com/api/docs/websocket-v2/level3
+https://docs.kraken.com/api/docs/websocket-v2/ohlc
+https://docs.kraken.com/api/docs/websocket-v2/trade
+https://docs.kraken.com/api/docs/websocket-v2/instrument
+
+Admin:
+https://docs.kraken.com/api/docs/websocket-v2/status
+https://docs.kraken.com/api/docs/websocket-v2/heartbeat
+https://docs.kraken.com/api/docs/websocket-v2/ping
+
+
+# Kraken Rest APIs
+https://docs.kraken.com/api/docs/guides/spot-rest-intro
+https://docs.kraken.com/api/docs/rest-api/get-tradable-asset-pairs
+
+---
 ## bitfinex websockets links:
 https://docs.bitfinex.com/docs/ws-general
 https://docs.bitfinex.com/docs/ws-public
@@ -83,6 +121,7 @@ https://docs.bitfinex.com/reference/ws-public-raw-books
 https://docs.bitfinex.com/reference/ws-public-candles
 https://docs.bitfinex.com/reference/ws-public-status
 
+---
 ## bitfinex public rest api links:
 https://docs.bitfinex.com/reference/rest-public-platform-status
 https://docs.bitfinex.com/reference/rest-public-ticker
@@ -100,13 +139,14 @@ post method...
 https://docs.bitfinex.com/reference/rest-public-market-average-price
 https://docs.bitfinex.com/reference/rest-public-foreign-exchange-rate
 
+---
 ## apache arrow go docs links:
 https://pkg.go.dev/github.com/apache/arrow/go/arrow
 https://arrow.apache.org/docs/format/Intro.html
 https://arrow.apache.org/docs/format/Columnar.html
 https://arrow.apache.org/docs/format/Versioning.html
 
-
+---
 ## Fyne documentation links:
 https://docs.fyne.io/api/v2.6/widget/
 https://docs.fyne.io/api/v2.6/
@@ -123,3 +163,5 @@ https://docs.fyne.io/api/v2.6/storage/
 https://docs.fyne.io/api/v2.6/storage/repository/
 https://docs.fyne.io/api/v2.6/test/
 https://docs.fyne.io/api/v2.6/theme/
+
+---

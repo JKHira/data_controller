@@ -12,6 +12,7 @@ type AppState struct {
 	// Data bindings
 	StatusBinding binding.String
 	StatsBinding  binding.String
+	ConfigStatusBinding binding.String
 
 	// File browser state
 	FilesData         []domain.FileItem
@@ -33,6 +34,7 @@ func NewAppState() *AppState {
 	return &AppState{
 		StatusBinding:     binding.NewString(),
 		StatsBinding:      binding.NewString(),
+		ConfigStatusBinding: binding.NewString(),
 		FilesData:         make([]domain.FileItem, 0),
 		FilteredFiles:     make([]domain.FileItem, 0),
 		SelectedFileIndex: -1,
