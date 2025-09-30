@@ -132,7 +132,10 @@ func DisplayFileSelectionInfo(fileViewer *widget.Entry, filePath string, info in
 	content := fmt.Sprintf("📄 File: %s\n", filepath.Base(filePath))
 	content += fmt.Sprintf("📁 Path: %s\n", filePath)
 
-	if fileInfo, ok := info.(interface{ Size() int64; ModTime() time.Time }); ok {
+	if fileInfo, ok := info.(interface {
+		Size() int64
+		ModTime() time.Time
+	}); ok {
 		content += fmt.Sprintf("📏 Size: %d bytes (%.2f MB)\n", fileInfo.Size(), float64(fileInfo.Size())/(1024*1024))
 		content += fmt.Sprintf("🕒 Modified: %s\n", fileInfo.ModTime().Format(time.RFC3339))
 	}
@@ -146,11 +149,4 @@ func DisplayFileSelectionInfo(fileViewer *widget.Entry, filePath string, info in
 	}
 
 	fileViewer.SetText(content)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

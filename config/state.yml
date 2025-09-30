@@ -1,3 +1,7 @@
+# This file is managing state of last updates or selected items for various data points of metadata or config of exchanges.
+# It could be auto updated by the application or selected manually by the user.
+# It is also used to avoid redundant fetching of data that rarely changes.
+# For the UTC timestamps are in ISO 8601 format.
 exchanges:
     bitfinex:
         pub:fees: "2025-09-29T16:46:26Z"

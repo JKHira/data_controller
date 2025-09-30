@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,6 +40,9 @@ type Application struct {
 
 	// Application state
 	state *state.AppState
+
+	// Configuration management
+	configManager *config.ConfigManager
 
 	// Controllers
 	fileController *controllers.FileController
@@ -106,6 +111,8 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 		refreshManager = mgr
 	}
 
+	configManager := initialiseConfigManager(logger, cfg)
+
 	return &Application{
 		logger:               logger,
 		cfg:                  cfg,
@@ -123,7 +130,45 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 		liveStreamData:       liveStreamData,
 		isRunning:            false,
 		configRefreshManager: refreshManager,
+		configManager:        configManager,
 	}
+}
+
+const defaultBitfinexRestBase = "https://api-pub.bitfinex.com/v2"
+
+func initialiseConfigManager(logger *zap.Logger, cfg *config.Config) *config.ConfigManager {
+	if cfg == nil {
+		return nil
+	}
+
+	configDir := filepath.Dir(cfg.GlobalConfigPath)
+	if configDir == "" {
+		configDir = "."
+	}
+	if !filepath.IsAbs(configDir) {
+		if abs, err := filepath.Abs(configDir); err == nil {
+			configDir = abs
+		}
+	}
+
+	basePath := filepath.Dir(configDir)
+	if basePath == "" {
+		basePath = "."
+	}
+	if !filepath.IsAbs(basePath) {
+		if abs, err := filepath.Abs(basePath); err == nil {
+			basePath = abs
+		}
+	}
+
+	restFetcher := config.NewBitfinexRESTFetcher(defaultBitfinexRestBase)
+	manager := config.NewConfigManager(logger, basePath, restFetcher)
+	if err := manager.Initialize(cfg.ActiveExchange); err != nil {
+		logger.Warn("Failed to initialise config manager", zap.Error(err))
+		return nil
+	}
+
+	return manager
 }
 
 // Initialize sets up the application UI and starts background services
@@ -153,14 +198,27 @@ func (a *Application) createLayout() {
 	// Top bar - status only (using modular component)
 	topBar := gui.CreateTopBar(a.state.StatusBinding)
 
-	wsPane, restPane := gui.BuildExchangePanesWithHandlers(
-		a.cfg,
-		a.handleWsConnect,
-		a.handleWsDisconnect,
-		a.configRefreshManager,
-		a.publishConfigStatus,
-		a.logger,
-	)
+	var wsPane, restPane fyne.CanvasObject
+	if a.configManager != nil {
+		wsPane, restPane = gui.BuildExchangePanesV2(
+			a.cfg,
+			a.configManager,
+			a.handleWsConnectConfig,
+			a.handleWsDisconnectConfig,
+			a.configRefreshManager,
+			a.publishConfigStatus,
+			a.logger,
+		)
+	} else {
+		wsPane, restPane = gui.BuildExchangePanesWithHandlers(
+			a.cfg,
+			a.handleWsConnect,
+			a.handleWsDisconnect,
+			a.configRefreshManager,
+			a.publishConfigStatus,
+			a.logger,
+		)
+	}
 
 	filesCard := a.filesPanel.GetContent()
 	fileViewerCard := a.viewerPanel.GetContent()
@@ -246,6 +304,88 @@ func (a *Application) handleWsConnect(exchange string, symbols []string) error {
 	return nil
 }
 
+func (a *Application) handleWsConnectConfig(wsConfig *gui.WSConnectionConfig) error {
+	if wsConfig == nil {
+		return fmt.Errorf("websocket configuration is nil")
+	}
+
+	exchange := wsConfig.Exchange
+	if exchange == "" {
+		exchange = a.cfg.ActiveExchange
+	}
+	if exchange == "" {
+		exchange = "bitfinex"
+	}
+
+	symbols := uniqueStrings(append([]string{}, wsConfig.Symbols...))
+	if len(symbols) == 0 {
+		for _, sub := range wsConfig.Channels {
+			if sub.Symbol != "" {
+				symbols = append(symbols, sub.Symbol)
+			}
+		}
+		symbols = uniqueStrings(symbols)
+	}
+
+	if len(symbols) == 0 {
+		return fmt.Errorf("no symbols selected for connection")
+	}
+
+	a.cfg.Symbols = symbols
+	a.cfg.WebSocket.ConfFlags = wsConfig.ConfFlags
+
+	var (
+		tickerEnabled bool
+		tradesEnabled bool
+		booksEnabled  bool
+		bookPrec      string
+		bookFreq      string
+		bookLen       string
+	)
+
+	for _, sub := range wsConfig.Channels {
+		switch sub.Channel {
+		case "ticker":
+			tickerEnabled = true
+		case "trades":
+			tradesEnabled = true
+		case "book":
+			booksEnabled = true
+			if bookPrec == "" && sub.Prec != "" {
+				bookPrec = sub.Prec
+			}
+			if bookFreq == "" && sub.Freq != "" {
+				bookFreq = sub.Freq
+			}
+			if bookLen == "" && sub.Len != "" {
+				bookLen = sub.Len
+			}
+		}
+	}
+
+	if !tickerEnabled && !tradesEnabled && !booksEnabled {
+		tickerEnabled = true
+	}
+
+	a.cfg.Channels.Ticker.Enabled = tickerEnabled
+	a.cfg.Channels.Trades.Enabled = tradesEnabled
+	a.cfg.Channels.Books.Enabled = booksEnabled
+
+	if bookPrec != "" {
+		a.cfg.Channels.Books.Precision = bookPrec
+	}
+	if bookFreq != "" {
+		a.cfg.Channels.Books.Frequency = bookFreq
+	}
+	if bookLen != "" {
+		if length, err := strconv.Atoi(bookLen); err == nil {
+			a.cfg.Channels.Books.Length = length
+		}
+	}
+
+	return a.handleWsConnect(exchange, symbols)
+}
+
 // handleWsDisconnect handles WebSocket disconnection requests for a specific exchange
 func (a *Application) handleWsDisconnect(exchange string) error {
 	a.logger.Info("GUI: WebSocket disconnect requested",
@@ -277,6 +417,18 @@ func (a *Application) handleWsDisconnect(exchange string) error {
 	return nil
 }
 
+func (a *Application) handleWsDisconnectConfig() error {
+	exchange := a.activeExchange
+	if exchange == "" {
+		exchange = a.cfg.ActiveExchange
+	}
+	if exchange == "" {
+		exchange = "bitfinex"
+	}
+
+	return a.handleWsDisconnect(exchange)
+}
+
 // handleFilterFiles handles file filtering
 func (a *Application) handleFilterFiles() {
 	// This is a placeholder - implement actual filtering logic
@@ -305,6 +457,12 @@ func (a *Application) handleWindowClose() {
 
 	// Quit the application
 	a.fyneApp.Quit()
+
+	if a.configManager != nil {
+		if err := a.configManager.Shutdown(); err != nil {
+			a.logger.Warn("Failed to shut down config manager", zap.Error(err))
+		}
+	}
 }
 
 // statusUpdater updates the status display periodically
@@ -320,6 +478,22 @@ func (a *Application) statusUpdater() {
 			a.updateStatus()
 		}
 	}
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		result = append(result, v)
+	}
+	return result
 }
 
 // fileListUpdater: 自動スキャン廃止（Scanボタンのみで実行）

@@ -1,0 +1,39 @@
+exchanges:
+    bitfinex:
+        ws:
+            connections:
+                - id: conn_1
+                  status: connected
+                  connected_at: 2025-09-30T11:46:50.765588+02:00
+                  subscriptions:
+                    - channel: ticker
+                      symbol: tBTCUSD
+                      chanId: 12345
+            ui_state:
+                active_tab: ticker
+                selected_symbols:
+                    - tBTCUSD
+                    - tETHUSD
+                connection_flags:
+                    checksum: true
+                    bulk: false
+                    timestamp: true
+                    sequence: false
+                channel_states:
+                    books:
+                        enabled: false
+                        frequency: F0
+                        length: "25"
+                        precision: P0
+                        selected_symbols: []
+                    candles:
+                        enabled: false
+                        selected_symbols: []
+                        timeframe: 1m
+                    status:
+                        enabled: false
+                        status_type: derivatives
+                    ticker:
+                        enabled: true
+                        selected_symbols: []
+        rest_config_cache: {}
