@@ -140,9 +140,9 @@ data_controller/
 │   │   │   └── viewer_panel.go     # ファイルビューアー
 │   │   ├── state/                  # GUI状態管理
 │   │   │   └── app_state.go        # GUI状態
-│   │   ├── app.go                  # レガシーGUIメイン
-│   │   ├── panes.go                # ペイン構成（レガシー）
-│   │   ├── panes_v2.go             # 新ペイン構成
+│   │   ├── panes_v2.go             # WebSocket/REST パネル構成
+│   │   ├── rest_api_panel.go       # REST Config + Data タブ
+│   │   ├── rest_data_panel.go      # RESTデータ取得UI
 │   │   ├── websocket_panel.go      # WebSocket設定パネル
 │   │   ├── channel_ticker.go       # Tickerチャンネル設定
 │   │   ├── channel_trades.go       # Tradesチャンネル設定
@@ -400,13 +400,19 @@ Bitfinex REST APIクライアント
 **主要機能:**
 - 5つのチャンネルタイプ（Ticker/Trades/Books/Candles/Status）
 - 30チャンネル購読制限のリアルタイム監視
-- 接続時の自動設定更新
-- 状態の永続化
+- 接続時の自動設定更新（RESTキャッシュのホットリロード）
+- 接続フラグ（Timestamp / Sequence / Checksum / Bulk）のワンクリック切り替え
+- 状態の永続化（選択内容・タブ・接続設定）
+- キャッシュ未取得時の「No data」ダイアログと即時取得
 
 ### GUI構成
 
 #### WebSocketPanel (`internal/gui/websocket_panel.go`)
 メインパネル - タブとサブスクリプションカウンター
+
+- Bitfinexタブのデータソースは `config.ConfigManager` を介して `data/bitfinex/restapi/config/*.json` を参照
+- 接続フラグ用チェックボックスを備え、合算値はBitfinexの `conf` メッセージへ反映
+- キャッシュが空の場合、「No data. Do you want to fetch config data?」を提示しREST更新を即実行
 
 #### 各チャンネルパネル
 
@@ -440,10 +446,10 @@ Subscriptions: 30 / 30 ⚠️ LIMIT REACHED
 ```
 
 #### 2. 自動設定更新
-WebSocket接続時に以下を自動実行:
-- ペア一覧の取得・更新
-- 通貨名称マッピングの更新
-- 設定ファイルのキャッシュ
+`config.ConfigManager` を通じて WebSocket 接続時に以下を自動実行:
+- 取引ペア／通貨マップの取得・更新
+- 正規化ルール（シンボル → 内部表記）の再ロード
+- `config/state/state.yml` への次回更新スケジュール格納
 
 #### 3. 状態永続化
 以下の情報をセッション間で保持:
@@ -451,8 +457,48 @@ WebSocket接続時に以下を自動実行:
 - 選択中のシンボル
 - チャンネル設定
 - 接続フラグ
+- RESTキャッシュの有効期限
+
+#### 4. GUI ↔ 設定管理フロー
+
+1. `gui/app/app.go` が起動時に `initialiseConfigManager` を呼び出し、`config/exchanges/bitfinex_config.yml` と REST キャッシュを読み込み。
+2. `BuildExchangePanesV2` が `ConfigManager` と WebSocket パネルを接続し、タブUIに最新のシンボルリストを注入。
+3. REST パネルは [Config|Data] の入れ子タブ構成となり、Config タブから従来のメタデータ更新、Data タブから Candles/Trades/Tickers History の取得ジョブを実行。
+4. ユーザー操作で生成された `WSConnectionConfig` は `handleWsConnectConfig` に渡され、既存の `ConnectionManager` が理解できる `cfg.Symbols` / `cfg.Channels` に変換。
+5. 接続成功後は `StartPeriodicUpdates` により REST キャッシュを自動更新、切断時には `StopPeriodicUpdates` と状態永続化を実施。
+6. `handleWindowClose` でアプリ終了時に `ConfigManager.Shutdown()` を呼び出し、タイマー停止と `state.yml` 保存を保証。
 
 詳細: [docs/WEBSOCKET_CONFIG.md](docs/WEBSOCKET_CONFIG.md)
+
+---
+
+## Bitfinex RESTデータ取得パネル
+
+`rest_api_panel.go` と `rest_data_panel.go` で構成された REST パネルは、[Config|Data] の 2 層タブ構成に刷新されました。
+
+- **Config タブ**: 既存のメタデータ取得ワークフロー。Essential/Daily/Optional の各エンドポイントを一括更新し、結果は `data/bitfinex/restapi/config/` に保存されます。
+- **Data タブ**: Candles / Trades / Tickers History の履歴データを REST API から収集し、CSV として `storage.base_path/bitfinex/restapi/data/` 以下に保存します。
+
+### Data タブの主な機能
+
+| カテゴリ | 機能 |
+| --- | --- |
+| 対応エンドポイント | Candles (`/v2/candles/{key}/hist`), Trades (`/v2/trades/{symbol}/hist`), Tickers History (`/v2/tickers/hist`) |
+| シンボル選択 | ConfigManager から読み込んだ最新のシンボルリストをマルチセレクトで提供 |
+| タイムレンジ | UTC の `YYYY-MM-DD HH:MM:SS` 形式。未入力時は過去24時間〜現在を自動適用 |
+| ページネーション | `sort=1`（昇順）でのウィンドウスクロールを採用。`Auto-pagination` を有効にすると連続取得 |
+| レート制限 | Candles 30/min, Trades 15/min, Tickers 30/min に合わせた per-endpoint limiter を内蔵 |
+| データ品質 | 重複排除、ギャップ検出（Candles: timeframe に基づく閾値）を設定可能 |
+| 保存形式 | CSV（ヘッダ付き）。Candles/Trades は 1 ファイル/組合せ、Tickers はシンボル配列をまとめて保存 |
+| ログ・進捗 | 実行状況をアクティビティログとステータスラベルに逐次表示。Stop ボタンで安全にキャンセル |
+
+CSV 出力例:
+
+- Candles: `candles_{symbol}_{timeframe}_{timestamp}.csv` （列: `mts,open,close,high,low,volume,symbol,timeframe`）
+- Trades: `trades_{symbol}_{timestamp}.csv` （列: `id,mts,amount,price,symbol`）
+- Tickers History: `tickers_{timestamp}.csv` （列: `symbol,bid,bid_size,ask,...,mts`）
+
+実行ループは `restapi.BitfinexDataClient` の各エンドポイント呼び出しを利用し、コンテキストキャンセルに対応した安全な停止／再開が可能です。
 
 ---
 

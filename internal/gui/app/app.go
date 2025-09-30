@@ -111,7 +111,10 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 		refreshManager = mgr
 	}
 
-	configManager := initialiseConfigManager(logger, cfg)
+	configManager, cmErr := initialiseConfigManager(logger, cfg)
+	if cmErr != nil {
+		logger.Error("Failed to initialise config manager", zap.Error(cmErr))
+	}
 
 	return &Application{
 		logger:               logger,
@@ -136,9 +139,9 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 
 const defaultBitfinexRestBase = "https://api-pub.bitfinex.com/v2"
 
-func initialiseConfigManager(logger *zap.Logger, cfg *config.Config) *config.ConfigManager {
+func initialiseConfigManager(logger *zap.Logger, cfg *config.Config) (*config.ConfigManager, error) {
 	if cfg == nil {
-		return nil
+		return nil, fmt.Errorf("config is nil")
 	}
 
 	configDir := filepath.Dir(cfg.GlobalConfigPath)
@@ -164,11 +167,10 @@ func initialiseConfigManager(logger *zap.Logger, cfg *config.Config) *config.Con
 	restFetcher := config.NewBitfinexRESTFetcher(defaultBitfinexRestBase)
 	manager := config.NewConfigManager(logger, basePath, restFetcher)
 	if err := manager.Initialize(cfg.ActiveExchange); err != nil {
-		logger.Warn("Failed to initialise config manager", zap.Error(err))
-		return nil
+		return nil, err
 	}
 
-	return manager
+	return manager, nil
 }
 
 // Initialize sets up the application UI and starts background services
@@ -199,21 +201,23 @@ func (a *Application) createLayout() {
 	topBar := gui.CreateTopBar(a.state.StatusBinding)
 
 	var wsPane, restPane fyne.CanvasObject
-	if a.configManager != nil {
+	if a.configManager == nil {
+		wsPane = widget.NewCard(
+			"WebSocket",
+			"Config manager initialisation failed",
+			widget.NewLabel("WebSocket control is unavailable. Check configuration logs."),
+		)
+		restPane = widget.NewCard(
+			"REST API",
+			"Unavailable",
+			widget.NewLabel("REST config controls are disabled."),
+		)
+	} else {
 		wsPane, restPane = gui.BuildExchangePanesV2(
 			a.cfg,
 			a.configManager,
 			a.handleWsConnectConfig,
 			a.handleWsDisconnectConfig,
-			a.configRefreshManager,
-			a.publishConfigStatus,
-			a.logger,
-		)
-	} else {
-		wsPane, restPane = gui.BuildExchangePanesWithHandlers(
-			a.cfg,
-			a.handleWsConnect,
-			a.handleWsDisconnect,
 			a.configRefreshManager,
 			a.publishConfigStatus,
 			a.logger,

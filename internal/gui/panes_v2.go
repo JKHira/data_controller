@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/trade-engine/data-controller/internal/config"
+	"github.com/trade-engine/data-controller/internal/restapi"
 	"github.com/trade-engine/data-controller/internal/services"
 )
 
@@ -101,10 +102,10 @@ func BuildExchangePanesV2(
 		}
 	}
 
-	restAPIPanel := NewRestAPIPanel(logger, cfg, refreshManager, statusCallback)
+	restAPIPanel := NewRestAPIPanel(logger, cfg, configManager, refreshManager, restapi.NewBitfinexDataClient(logger), statusCallback)
 
 	restTabs := container.NewAppTabs(
-		container.NewTabItem("Bitfinex", restAPIPanel.CreateBitfinexConfigPanel()),
+		container.NewTabItem("Bitfinex", restAPIPanel.CreateBitfinexPanel()),
 		container.NewTabItem("Binance", widget.NewLabel("Coming soon")),
 		container.NewTabItem("Coinbase", widget.NewLabel("Coming soon")),
 		container.NewTabItem("Kraken", widget.NewLabel("Coming soon")),

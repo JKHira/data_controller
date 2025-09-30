@@ -23,7 +23,9 @@ import (
 type RestAPIPanel struct {
 	logger         *zap.Logger
 	cfg            *config.Config
+	configManager  *config.ConfigManager
 	refreshManager *services.ConfigRefreshManager
+	dataPanel      *RestDataPanel
 	statusCallback func(string)
 
 	runningMu sync.Mutex
@@ -34,20 +36,23 @@ type RestAPIPanel struct {
 }
 
 // NewRestAPIPanel creates a new REST API panel with configuration controls.
-func NewRestAPIPanel(logger *zap.Logger, cfg *config.Config, manager *services.ConfigRefreshManager, callback func(string)) *RestAPIPanel {
+func NewRestAPIPanel(logger *zap.Logger, cfg *config.Config, configManager *config.ConfigManager, manager *services.ConfigRefreshManager, dataClient *restapi.BitfinexDataClient, callback func(string)) *RestAPIPanel {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &RestAPIPanel{
+	panel := &RestAPIPanel{
 		logger:         logger,
 		cfg:            cfg,
+		configManager:  configManager,
 		refreshManager: manager,
 		statusCallback: callback,
 	}
+	panel.dataPanel = NewRestDataPanel(logger, cfg, configManager, dataClient)
+	return panel
 }
 
-// CreateBitfinexConfigPanel builds the Bitfinex configuration panel content.
-func (p *RestAPIPanel) CreateBitfinexConfigPanel() fyne.CanvasObject {
+// CreateBitfinexPanel builds the Bitfinex REST panel containing Config and Data tabs.
+func (p *RestAPIPanel) CreateBitfinexPanel() fyne.CanvasObject {
 	essentialList := p.buildEndpointList("Essential & Daily", services.EssentialEndpointInfos())
 	optionalList := p.buildEndpointList("Optional (Weekly)", services.OptionalEndpointInfos())
 
@@ -66,7 +71,19 @@ func (p *RestAPIPanel) CreateBitfinexConfigPanel() fyne.CanvasObject {
 		p.optionalButton,
 	)
 
-	return container.NewVScroll(content)
+	configTab := container.NewVScroll(content)
+
+	var dataTab fyne.CanvasObject
+	if p.dataPanel != nil {
+		dataTab = p.dataPanel.Build()
+	} else {
+		dataTab = widget.NewLabel("REST data acquisition requires an initialised ConfigManager.")
+	}
+
+	return container.NewAppTabs(
+		container.NewTabItem("Config", configTab),
+		container.NewTabItem("Data", dataTab),
+	)
 }
 
 func (p *RestAPIPanel) buildEndpointList(title string, endpoints []services.EndpointInfo) fyne.CanvasObject {
