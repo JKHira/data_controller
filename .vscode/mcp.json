@@ -88,12 +88,11 @@
         },
         // Context7（最新版ドキュメント注入）
         "context7": {
-            "type": "stdio",
-            "command": "npx",
-            "args": [
-                "-y",
-                "@upstash/context7-mcp@latest"
-            ]
+            "type": "http",
+            "url": "https://mcp.context7.com/mcp",
+            "headers": {
+                "CONTEXT7_API_KEY": "Bearer ctx7sk-80f9d00a-d61d-4358-a399-7f11dd0e005e"
+            }
         },
         // OpenAPI MCP（AWS Labs）
         "openapi": {

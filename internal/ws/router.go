@@ -92,17 +92,28 @@ func (r *Router) RouteMessage(chanID int32, channelInfo *ChannelInfo, data []jso
 }
 
 func (r *Router) routeTicker(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64) error {
-	if len(data) < 10 {
+	// Bitfinex ticker message format: [CHANNEL_ID, [ticker_array], TIMESTAMP]
+	// So data[0] contains the ticker array with 10 values
+	if len(data) < 1 {
 		r.logger.Warn("Ticker data too short", zap.Int("length", len(data)))
+		return nil
+	}
+
+	// Parse the nested ticker array
+	var tickerArray []float64
+	if err := json.Unmarshal(data[0], &tickerArray); err != nil {
+		r.logger.Error("Failed to unmarshal ticker array", zap.Error(err))
+		return err
+	}
+
+	if len(tickerArray) < 10 {
+		r.logger.Warn("Ticker array too short", zap.Int("length", len(tickerArray)))
 		return nil
 	}
 
 	var values [10]float64
 	for i := 0; i < 10; i++ {
-		if err := json.Unmarshal(data[i], &values[i]); err != nil {
-			r.logger.Error("Failed to unmarshal ticker value", zap.Int("index", i), zap.Error(err))
-			return err
-		}
+		values[i] = tickerArray[i]
 	}
 
 	ticker := &schema.Ticker{

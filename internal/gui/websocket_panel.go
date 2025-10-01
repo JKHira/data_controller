@@ -183,17 +183,16 @@ func (p *WebSocketPanel) buildUI() {
 	)
 
 	body := container.NewVBox(bodyItems...)
-
 	bodyScroll := container.NewVScroll(body)
-	bodyScroll.SetMinSize(fyne.NewSize(0, 1100))
 
 	// Subscription counter
 	p.subscriptionInfo = widget.NewLabel("")
 	p.updateSubscriptionInfo()
 
-	// Status bar
-	p.statusBar = widget.NewLabel("Disconnected")
+	// Status bar (hidden until a message needs to be shown)
+	p.statusBar = widget.NewLabel("")
 	p.statusBar.Wrapping = fyne.TextWrapWord
+	p.statusBar.Hide()
 
 	// Connect button
 	p.connectBtn = widget.NewButton("Connect", func() {
@@ -204,21 +203,18 @@ func (p *WebSocketPanel) buildUI() {
 	bottomSection := container.NewVBox(
 		widget.NewSeparator(),
 		p.subscriptionInfo,
-		container.NewBorder(nil, nil, nil, p.connectBtn,
-			p.statusBar,
-		),
+		container.NewHBox(p.connectBtn),
+		p.statusBar,
 	)
 
-	// Main container with scrolling (tab content limited to 1300px height)
-	content := container.NewBorder(
+	// Main container with scrolling
+	p.container = container.NewBorder(
 		nil,
 		bottomSection,
 		nil,
 		nil,
-		bodyScroll,
+		container.NewMax(bodyScroll),
 	)
-
-	p.container = container.NewVBox(content)
 }
 
 // Build returns the panel's UI container
@@ -258,7 +254,7 @@ func (p *WebSocketPanel) handleConnect() {
 
 		// Update UI
 		p.connectBtn.SetText("Disconnect")
-		p.statusBar.SetText("Connected")
+		p.setStatusMessage("")
 		p.saveState()
 
 		if p.configManager != nil {
@@ -275,7 +271,7 @@ func (p *WebSocketPanel) handleConnect() {
 		}
 
 		p.connectBtn.SetText("Connect")
-		p.statusBar.SetText("Disconnected")
+		p.setStatusMessage("")
 
 		if p.configManager != nil {
 			p.configManager.StopPeriodicUpdates()
@@ -386,9 +382,7 @@ func (p *WebSocketPanel) canAddSubscriptions(delta int) bool {
 	count, _ := p.subscriptionCount.Get()
 	if count+delta > p.maxSubscriptions {
 		warning := fmt.Sprintf("⚠️ Subscription limit reached (%d/%d). Remove channels before adding new ones.", count, p.maxSubscriptions)
-		if p.statusBar != nil {
-			p.statusBar.SetText(warning)
-		}
+		p.setStatusMessage(warning)
 		return false
 	}
 
@@ -446,9 +440,7 @@ func (p *WebSocketPanel) buildNoDataBanner() fyne.CanvasObject {
 		if card != nil {
 			card.Hide()
 		}
-		if p.statusBar != nil {
-			p.statusBar.SetText("Config fetch postponed. UI may use limited fallback symbols.")
-		}
+		p.setStatusMessage("Config fetch postponed. UI may use limited fallback symbols.")
 	})
 
 	buttonRow := container.NewHBox(yesBtn, laterBtn)
@@ -465,21 +457,15 @@ func (p *WebSocketPanel) buildNoDataBanner() fyne.CanvasObject {
 
 func (p *WebSocketPanel) fetchInitialConfig(banner fyne.CanvasObject) {
 	if p.configManager == nil {
-		if p.statusBar != nil {
-			p.statusBar.SetText("Config manager not initialized")
-		}
+		p.setStatusMessage("Config manager not initialized")
 		return
 	}
 
-	if p.statusBar != nil {
-		p.statusBar.SetText("Fetching Bitfinex config...")
-	}
+	p.setStatusMessage("Fetching Bitfinex config...")
 
 	err := p.configManager.RefreshConfigOnConnect(p.exchange)
 	if err != nil {
-		if p.statusBar != nil {
-			p.statusBar.SetText(fmt.Sprintf("Config fetch failed: %v", err))
-		}
+		p.setStatusMessage(fmt.Sprintf("Config fetch failed: %v", err))
 		if banner != nil {
 			banner.Show()
 		}
@@ -497,9 +483,7 @@ func (p *WebSocketPanel) fetchInitialConfig(banner fyne.CanvasObject) {
 		banner.Hide()
 	}
 
-	if p.statusBar != nil {
-		p.statusBar.SetText("Config data refreshed from REST API")
-	}
+	p.setStatusMessage("Config data refreshed from REST API")
 }
 
 // IncrementSubscriptionCount increments the subscription counter
@@ -611,9 +595,25 @@ func (p *WebSocketPanel) saveActiveTab(tabName string) {
 	p.configManager.SaveState()
 }
 
+func (p *WebSocketPanel) setStatusMessage(message string) {
+	if p.statusBar == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(message)
+	fyne.Do(func() {
+		if trimmed == "" {
+			p.statusBar.SetText("")
+			p.statusBar.Hide()
+		} else {
+			p.statusBar.SetText(trimmed)
+			p.statusBar.Show()
+		}
+	})
+}
+
 // showError displays an error message
 func (p *WebSocketPanel) showError(message string) {
-	p.statusBar.SetText(fmt.Sprintf("Error: %s", message))
+	p.setStatusMessage(fmt.Sprintf("Error: %s", message))
 	p.logger.Error("WebSocket panel error", zap.String("message", message))
 }
 
@@ -643,5 +643,5 @@ func (p *WebSocketPanel) Reset() {
 	p.subscriptionCount.Set(0)
 	p.updateSubscriptionInfo()
 	p.connectBtn.SetText("Connect")
-	p.statusBar.SetText("Disconnected")
+	p.setStatusMessage("")
 }

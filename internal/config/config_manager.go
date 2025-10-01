@@ -14,16 +14,16 @@ import (
 
 // ConfigManager manages exchange configurations and their lifecycle
 type ConfigManager struct {
-	logger          *zap.Logger
-	basePath        string
-	exchangeConfig  *BitfinexConfig
-	appState        *ApplicationState
-	normalizer      *Normalizer
-	restClient      RestConfigFetcher
-	updateTimers    map[string]*time.Timer
-	timerMu         sync.Mutex
-	ctx             context.Context
-	cancel          context.CancelFunc
+	logger         *zap.Logger
+	basePath       string
+	exchangeConfig *BitfinexConfig
+	appState       *ApplicationState
+	normalizer     *Normalizer
+	restClient     RestConfigFetcher
+	updateTimers   map[string]*time.Timer
+	timerMu        sync.Mutex
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // RestConfigFetcher interface for fetching REST config data
@@ -51,19 +51,14 @@ func (cm *ConfigManager) Initialize(exchange string) error {
 
 	// Check if config exists, if not create default
 	if _, err := os.Stat(exchangeConfigPath); os.IsNotExist(err) {
-		cm.logger.Info("Creating default exchange config", zap.String("path", exchangeConfigPath))
-		defaultCfg := GetDefaultBitfinexConfig()
-		if err := SaveBitfinexConfig(exchangeConfigPath, defaultCfg); err != nil {
-			return fmt.Errorf("save default config: %w", err)
-		}
-		cm.exchangeConfig = defaultCfg
-	} else {
-		cfg, err := LoadBitfinexConfig(exchangeConfigPath)
-		if err != nil {
-			return fmt.Errorf("load exchange config: %w", err)
-		}
-		cm.exchangeConfig = cfg
+		return fmt.Errorf("exchange config not found: %s", exchangeConfigPath)
 	}
+
+	cfg, err := LoadBitfinexConfig(exchangeConfigPath)
+	if err != nil {
+		return fmt.Errorf("load exchange config: %w", err)
+	}
+	cm.exchangeConfig = cfg
 
 	// Load application state
 	stateDir := filepath.Join(cm.basePath, "config", "state")

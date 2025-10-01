@@ -285,6 +285,14 @@ func (s *ApplicationState) UpdateRestConfigCache(exchange, endpoint string, last
 		}
 	}
 
+	// Ensure maps are initialized (in case loaded from YAML)
+	if exState.RestConfigCache.LastUpdated == nil {
+		exState.RestConfigCache.LastUpdated = make(map[string]time.Time)
+	}
+	if exState.RestConfigCache.NextUpdate == nil {
+		exState.RestConfigCache.NextUpdate = make(map[string]time.Time)
+	}
+
 	exState.RestConfigCache.LastUpdated[endpoint] = lastUpdated
 	exState.RestConfigCache.NextUpdate[endpoint] = nextUpdate
 }

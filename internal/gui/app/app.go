@@ -80,7 +80,10 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 	}
 
 	window := fyneApp.NewWindow(cfg.GUI.Title)
-	window.Resize(fyne.NewSize(float32(cfg.GUI.Width), float32(cfg.GUI.Height)))
+	window.Resize(fyne.NewSize(float32(fixedWindowWidth), float32(fixedWindowHeight)))
+	window.SetFixedSize(true)
+	cfg.GUI.Width = fixedWindowWidth
+	cfg.GUI.Height = fixedWindowHeight
 
 	// Initialize services
 	arrowReader := arrowsink.NewFileReader(logger)
@@ -137,7 +140,11 @@ func NewApplication(logger *zap.Logger, cfg *config.Config) *Application {
 	}
 }
 
-const defaultBitfinexRestBase = "https://api-pub.bitfinex.com/v2"
+const (
+	defaultBitfinexRestBase = "https://api-pub.bitfinex.com/v2"
+	fixedWindowWidth        = 2400
+	fixedWindowHeight       = 1300
+)
 
 func initialiseConfigManager(logger *zap.Logger, cfg *config.Config) (*config.ConfigManager, error) {
 	if cfg == nil {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +45,7 @@ func NewBitfinexDataClient(logger *zap.Logger) *BitfinexDataClient {
 		limiters: map[string]*rate.Limiter{
 			candlesEndpointKey: rate.NewLimiter(rate.Every(time.Minute/30), 1),
 			tradesEndpointKey:  rate.NewLimiter(rate.Every(time.Minute/15), 1),
-			tickersEndpointKey: rate.NewLimiter(rate.Every(time.Minute/30), 1),
+			tickersEndpointKey: rate.NewLimiter(rate.Every(time.Minute/10), 1),
 		},
 	}
 }
@@ -189,38 +190,80 @@ func (c *BitfinexDataClient) FetchTickersHistory(ctx context.Context, req Ticker
 }
 
 func (c *BitfinexDataClient) doRequest(ctx context.Context, limiterKey, path string, query url.Values) ([]byte, error) {
-	if err := c.waitLimiter(ctx, limiterKey); err != nil {
-		return nil, err
-	}
+	const (
+		maxRetries     = 5
+		maxBackoff     = 30 * time.Second
+		initialBackoff = time.Second
+	)
 
 	reqURL := c.baseURL + path
 	if len(query) > 0 {
 		reqURL += "?" + query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, err
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := c.waitLimiter(ctx, limiterKey); err != nil {
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("User-Agent", "trade-engine-data-controller/1.0")
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			delay := initialBackoff << attempt
+			if retryAfter := parseRetryAfter(resp.Header.Get("Retry-After")); retryAfter > 0 {
+				delay = retryAfter
+			}
+			if delay > maxBackoff {
+				delay = maxBackoff
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		}
+
+		return body, nil
 	}
 
-	req.Header.Set("User-Agent", "trade-engine-data-controller/1.0")
+	return nil, fmt.Errorf("too many retries for %s", path)
+}
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
+func parseRetryAfter(header string) time.Duration {
+	if header == "" {
+		return 0
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	if retryTime, err := http.ParseTime(header); err == nil {
+		delay := time.Until(retryTime)
+		if delay > 0 {
+			return delay
+		}
 	}
-
-	return body, nil
+	return 0
 }
 
 func (c *BitfinexDataClient) waitLimiter(ctx context.Context, key string) error {

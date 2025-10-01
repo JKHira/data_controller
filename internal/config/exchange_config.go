@@ -11,11 +11,11 @@ import (
 
 // BitfinexConfig represents the Bitfinex exchange-specific configuration
 type BitfinexConfig struct {
-	Endpoints     BitfinexEndpoints     `yaml:"endpoints"`
-	Limits        BitfinexLimits        `yaml:"limits"`
-	Defaults      BitfinexDefaults      `yaml:"defaults"`
-	Normalization NormalizationRules    `yaml:"normalization"`
-	RestConfig    []RestConfigEndpoint  `yaml:"rest_config_endpoints"`
+	Endpoints     BitfinexEndpoints    `yaml:"endpoints"`
+	Limits        BitfinexLimits       `yaml:"limits"`
+	Defaults      BitfinexDefaults     `yaml:"defaults"`
+	Normalization NormalizationRules   `yaml:"normalization"`
+	RestConfig    []RestConfigEndpoint `yaml:"rest_config_endpoints"`
 }
 
 type BitfinexEndpoints struct {
@@ -121,66 +121,4 @@ func createBackup(path string) error {
 
 	// Write backup
 	return os.WriteFile(backupPath, content, 0644)
-}
-
-// GetDefaultBitfinexConfig returns a default Bitfinex configuration
-func GetDefaultBitfinexConfig() *BitfinexConfig {
-	return &BitfinexConfig{
-		Endpoints: BitfinexEndpoints{
-			WSPublic:   "wss://api-pub.bitfinex.com/ws/2",
-			WSAuth:     "wss://api.bitfinex.com/ws/2",
-			RestPublic: "https://api-pub.bitfinex.com/v2",
-		},
-		Limits: BitfinexLimits{
-			WSConnectionsPerMinute: 20,
-			WSMaxSubscriptions:     30,
-			RestRateLimit:          90,
-		},
-		Defaults: BitfinexDefaults{
-			Book: BookDefaults{
-				Prec: "P0",
-				Freq: "F0",
-				Len:  "25",
-			},
-			Candles: CandlesDefaults{
-				Timeframe: "1m",
-			},
-		},
-		Normalization: NormalizationRules{
-			PairFormat: "base-quote",
-			Uppercase:  true,
-		},
-		RestConfig: []RestConfigEndpoint{
-			{
-				Endpoint:      "pub:list:pair:exchange",
-				CacheDuration: 3600, // 1 hour
-				File:          "list_pair_exchange.json",
-			},
-			{
-				Endpoint:      "pub:list:pair:margin",
-				CacheDuration: 3600,
-				File:          "list_pair_margin.json",
-			},
-			{
-				Endpoint:      "pub:list:pair:futures",
-				CacheDuration: 3600,
-				File:          "list_pair_futures.json",
-			},
-			{
-				Endpoint:      "pub:list:currency",
-				CacheDuration: 86400, // 24 hours
-				File:          "list_currency_margin.json",
-			},
-			{
-				Endpoint:      "pub:map:currency:label",
-				CacheDuration: 86400,
-				File:          "map_currency_label.json",
-			},
-			{
-				Endpoint:      "pub:map:currency:sym",
-				CacheDuration: 86400,
-				File:          "map_currency_sym.json",
-			},
-		},
-	}
 }

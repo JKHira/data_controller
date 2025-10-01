@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"fmt"
 	"image/color"
 
 	"fyne.io/fyne/v2"
@@ -94,15 +93,19 @@ func BuildExchangePanesV2(
 
 	// --- REST API pane ---
 	restToggle := NewToggleButton("REST API Disconnected", "REST API Connected", orange, green)
-	restToggle.OnChanged = func(connected bool) {
-		if logger != nil {
-			logger.Info("REST API toggle changed", zap.Bool("connected", connected))
-		} else {
-			fmt.Printf("REST API toggle changed: %v\n", connected)
-		}
-	}
+	restToggle.SetInteractive(false)
 
 	restAPIPanel := NewRestAPIPanel(logger, cfg, configManager, refreshManager, restapi.NewBitfinexDataClient(logger), statusCallback)
+
+	// Connect REST Data Panel state to toggle
+	if restAPIPanel.GetDataPanel() != nil {
+		restAPIPanel.GetDataPanel().SetOnStateChange(func(connected bool) {
+			restToggle.Set(connected)
+			if connected {
+				restToggle.SetLabels("REST API Disconnected", "REST API Connected")
+			}
+		})
+	}
 
 	restTabs := container.NewAppTabs(
 		container.NewTabItem("Bitfinex", restAPIPanel.CreateBitfinexPanel()),

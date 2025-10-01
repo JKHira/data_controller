@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +27,7 @@ type RestAPIPanel struct {
 	cfg            *config.Config
 	configManager  *config.ConfigManager
 	refreshManager *services.ConfigRefreshManager
-	dataPanel      *RestDataPanel
+	dataPanelV2    *RestDataPanelV2
 	statusCallback func(string)
 
 	runningMu sync.Mutex
@@ -47,7 +49,10 @@ func NewRestAPIPanel(logger *zap.Logger, cfg *config.Config, configManager *conf
 		refreshManager: manager,
 		statusCallback: callback,
 	}
-	panel.dataPanel = NewRestDataPanel(logger, cfg, configManager, dataClient)
+	// Create new RestDataPanelV2 (parentWindow will be set later if needed)
+	panel.dataPanelV2 = NewRestDataPanelV2(nil)
+	panel.initialiseDataPanelSymbols()
+	panel.initialiseDataPanelStorage()
 	return panel
 }
 
@@ -74,8 +79,8 @@ func (p *RestAPIPanel) CreateBitfinexPanel() fyne.CanvasObject {
 	configTab := container.NewVScroll(content)
 
 	var dataTab fyne.CanvasObject
-	if p.dataPanel != nil {
-		dataTab = p.dataPanel.Build()
+	if p.dataPanelV2 != nil {
+		dataTab = p.dataPanelV2
 	} else {
 		dataTab = widget.NewLabel("REST data acquisition requires an initialised ConfigManager.")
 	}
@@ -84,6 +89,52 @@ func (p *RestAPIPanel) CreateBitfinexPanel() fyne.CanvasObject {
 		container.NewTabItem("Config", configTab),
 		container.NewTabItem("Data", dataTab),
 	)
+}
+
+func (p *RestAPIPanel) initialiseDataPanelSymbols() {
+	if p.dataPanelV2 == nil {
+		return
+	}
+
+	var loader func() ([]string, error)
+	if p.configManager != nil {
+		loader = func() ([]string, error) {
+			exchange := p.activeExchange()
+			pairs, err := p.configManager.GetAvailablePairs(exchange, "exchange")
+			if err != nil {
+				return nil, err
+			}
+			return pairs, nil
+		}
+		p.dataPanelV2.SetSymbolLoader(loader)
+	}
+
+	if loader != nil {
+		if pairs, err := loader(); err == nil {
+			p.dataPanelV2.SetSymbols(pairs)
+		} else {
+			if p.logger != nil {
+				p.logger.Warn("Failed to initialise REST symbols from config", zap.Error(err))
+			}
+			p.dataPanelV2.SetSymbols([]string{"tBTCUSD", "tETHUSD"})
+		}
+	} else {
+		p.dataPanelV2.SetSymbols([]string{"tBTCUSD", "tETHUSD"})
+	}
+}
+
+func (p *RestAPIPanel) initialiseDataPanelStorage() {
+	if p.dataPanelV2 == nil || p.cfg == nil {
+		return
+	}
+
+	basePath := strings.TrimSpace(p.cfg.Storage.BasePath)
+	if basePath == "" {
+		return
+	}
+
+	dataDir := filepath.Join(basePath, p.activeExchange(), "restapi", "data")
+	p.dataPanelV2.SetDataDirectory(dataDir)
 }
 
 func (p *RestAPIPanel) buildEndpointList(title string, endpoints []services.EndpointInfo) fyne.CanvasObject {
@@ -183,6 +234,11 @@ func (p *RestAPIPanel) activeExchange() string {
 		return p.cfg.ActiveExchange
 	}
 	return "bitfinex"
+}
+
+// GetDataPanel returns the RestDataPanelV2 instance
+func (p *RestAPIPanel) GetDataPanel() *RestDataPanelV2 {
+	return p.dataPanelV2
 }
 
 // flatButton is a minimal rectangular button used in the REST panel.
