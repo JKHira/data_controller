@@ -6,31 +6,29 @@ exchanges:
                   status: connected
                   connected_at: 2025-09-30T11:46:50.765588+02:00
                   subscriptions:
-                    - channel: ticker
-                      symbol: tBTCUSD
-                      chanId: 12345
+                      - channel: ticker
+                        symbol: tBTCUSD
+                        chanId: 12345
             ui_state:
                 active_tab: candles
                 selected_symbols:
                     - tBTCUSD
                     - tETHUSD
                 connection_flags:
-                    checksum: true
-                    bulk: true
+                    checksum: false
+                    bulk: false
                     timestamp: true
                     sequence: true
                 channel_states:
                     books:
-                        enabled: true
+                        enabled: false
                         frequency: F0
                         length: "25"
                         precision: P0
-                        selected_symbols:
-                            - tADABTC
+                        selected_symbols: []
                     candles:
-                        enabled: true
-                        selected_symbols:
-                            - tDSHBTC
+                        enabled: false
+                        selected_symbols: []
                         timeframe: 1m
                     status:
                         enabled: false
