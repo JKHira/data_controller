@@ -1,0 +1,36 @@
+# Bitfinex Exchange Profile Configuration
+# This file contains WebSocket, symbols, and channel settings for Bitfinex
+
+websocket:
+  url: "wss://api-pub.bitfinex.com/ws/2"
+  reconnect_interval: 5s
+  heartbeat_timeout: 30s
+  ping_interval: 15s
+  max_connections: 5
+  connection_timeout: 10s
+  conf_flags: 131072  # TIMESTAMP flag
+
+symbols:
+  - "tBTCUSD"
+  - "tETHUSD"
+
+channels:
+  ticker:
+    enabled: true
+    sampling_rate: 1s
+
+  trades:
+    enabled: true
+    msg_type: "te"  # te = trade executed, tu = trade update
+
+  books:
+    enabled: true
+    precision: "P0"
+    frequency: "F0"
+    length: 25
+
+  raw_books:
+    enabled: false
+    precision: "R0"
+    frequency: "F0"
+    length: 25

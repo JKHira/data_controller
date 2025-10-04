@@ -22,14 +22,14 @@ type ArrowStorage struct {
 
 // ManifestEntry represents a single entry in the JSONL manifest
 type ManifestEntry struct {
-	Timestamp  time.Time `json:"ts"`
-	Exchange   string    `json:"exchange"`
-	DataType   string    `json:"data_type"`
-	Endpoint   string    `json:"endpoint"`
-	FilePath   string    `json:"file"`
-	Count      int       `json:"count"`
-	SizeBytes  int64     `json:"size_bytes"`
-	Format     string    `json:"format"`
+	Timestamp time.Time `json:"ts"`
+	Exchange  string    `json:"exchange"`
+	DataType  string    `json:"data_type"`
+	Endpoint  string    `json:"endpoint"`
+	FilePath  string    `json:"file"`
+	Count     int       `json:"count"`
+	SizeBytes int64     `json:"size_bytes"`
+	Format    string    `json:"format"`
 }
 
 // NewArrowStorage creates a new Arrow storage handler
@@ -160,7 +160,7 @@ func (a *ArrowStorage) convertInterfaceArrayToRecord(data []interface{}, endpoin
 
 	// For tickers data (array of arrays)
 	if _, ok := data[0].([]interface{}); ok {
-		return a.convertTickersToRecord(data, endpoint)
+		return a.convertTickersToRecord(data)
 	}
 
 	// For simple data, convert to JSON strings
@@ -197,7 +197,7 @@ func (a *ArrowStorage) convertInterfaceArrayToRecord(data []interface{}, endpoin
 }
 
 // convertTickersToRecord converts ticker data to Arrow Record
-func (a *ArrowStorage) convertTickersToRecord(data []interface{}, endpoint string) (arrow.Record, error) {
+func (a *ArrowStorage) convertTickersToRecord(data []interface{}) (arrow.Record, error) {
 	schema := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "symbol", Type: arrow.BinaryTypes.String},

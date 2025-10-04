@@ -47,7 +47,7 @@ func NewConfigManager(logger *zap.Logger, basePath string, restClient RestConfig
 // Initialize loads configuration and state
 func (cm *ConfigManager) Initialize(exchange string) error {
 	// Load exchange config
-	exchangeConfigPath := filepath.Join(cm.basePath, "config", "exchanges", fmt.Sprintf("%s_config.yml", exchange))
+	exchangeConfigPath := filepath.Join(cm.basePath, "config", "exchanges", fmt.Sprintf("%s.yml", exchange))
 
 	// Check if config exists, if not create default
 	if _, err := os.Stat(exchangeConfigPath); os.IsNotExist(err) {
@@ -61,9 +61,9 @@ func (cm *ConfigManager) Initialize(exchange string) error {
 	cm.exchangeConfig = cfg
 
 	// Load application state
-	stateDir := filepath.Join(cm.basePath, "config", "state")
+	stateDir := filepath.Join(cm.basePath, "config", "runtime")
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
+		return fmt.Errorf("create runtime directory: %w", err)
 	}
 
 	statePath := filepath.Join(stateDir, "state.yml")

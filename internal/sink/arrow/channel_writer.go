@@ -3,6 +3,7 @@ package arrow
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
@@ -20,32 +21,21 @@ func (cw *ChannelWriter) writeRawBookEvent(event *schema.RawBookEvent) error {
 	// Add data to builders
 	builders := cw.Builder.builders
 
-	// Common fields
-	builders[ExchangeIdx].(*array.StringBuilder).Append(string(event.Exchange))
-	builders[ChannelIdx].(*array.StringBuilder).Append(string(event.Channel))
+	// Common fields (4 fields total: symbol, pair_or_currency, seq, recv_ts)
 	builders[SymbolIdx].(*array.StringBuilder).Append(event.Symbol)
 	builders[PairOrCurrencyIdx].(*array.StringBuilder).Append(event.PairOrCurrency)
-	builders[ConnIDIdx].(*array.StringBuilder).Append(event.ConnID)
-	builders[ChanIDIdx].(*array.Int32Builder).Append(event.ChanID)
-	appendOptionalInt64(builders[SubIDIdx].(*array.Int64Builder), event.SubID)
-	builders[TsMicrosIdx].(*array.Int64Builder).Append(event.RecvTS)
-	builders[ConfFlagsIdx].(*array.Int64Builder).Append(event.ConfFlags)
 	appendOptionalInt64(builders[SeqIdx].(*array.Int64Builder), event.Seq)
-	appendOptionalInt64(builders[SrvMTSIdx].(*array.Int64Builder), event.SrvMTS)
-	appendOptionalInt64(builders[WSTSIdx].(*array.Int64Builder), event.WSTS)
 	builders[RecvTSIdx].(*array.Int64Builder).Append(event.RecvTS)
-	appendOptionalInt64(builders[BatchIDIdx].(*array.Int64Builder), event.BatchID)
-	builders[IngestIDIdx].(*array.StringBuilder).Append(event.IngestID)
-	builders[SourceFileIdx].(*array.StringBuilder).Append(event.SourceFile)
-	appendOptionalInt64(builders[LineNoIdx].(*array.Int64Builder), event.LineNo)
 
-	// Raw book event specific fields
-	builders[17].(*array.Int64Builder).Append(event.OrderID)
-	builders[18].(*array.Float64Builder).Append(event.Price)
-	builders[19].(*array.Float64Builder).Append(event.Amount)
-	builders[20].(*array.StringBuilder).Append(string(event.Op))
-	builders[21].(*array.StringBuilder).Append(string(event.Side))
-	builders[22].(*array.BooleanBuilder).Append(event.IsSnapshot)
+	// Raw book event specific fields (starting at index 4)
+	// batch_id, order_id, price, amount, op, side, is_snapshot
+	appendOptionalInt64(builders[4].(*array.Int64Builder), event.BatchID)
+	builders[5].(*array.Int64Builder).Append(event.OrderID)
+	builders[6].(*array.Float64Builder).Append(event.Price)
+	builders[7].(*array.Float64Builder).Append(event.Amount)
+	builders[8].(*array.StringBuilder).Append(string(event.Op))
+	builders[9].(*array.StringBuilder).Append(string(event.Side))
+	builders[10].(*array.BooleanBuilder).Append(event.IsSnapshot)
 
 	cw.RowCount++
 
@@ -68,34 +58,20 @@ func (cw *ChannelWriter) writeBookLevel(level *schema.BookLevel) error {
 	// Add data to builders
 	builders := cw.Builder.builders
 
-	// Common fields
-	builders[ExchangeIdx].(*array.StringBuilder).Append(string(level.Exchange))
-	builders[ChannelIdx].(*array.StringBuilder).Append(string(level.Channel))
+	// Common fields (4 fields total: symbol, pair_or_currency, seq, recv_ts)
 	builders[SymbolIdx].(*array.StringBuilder).Append(level.Symbol)
 	builders[PairOrCurrencyIdx].(*array.StringBuilder).Append(level.PairOrCurrency)
-	builders[ConnIDIdx].(*array.StringBuilder).Append(level.ConnID)
-	builders[ChanIDIdx].(*array.Int32Builder).Append(level.ChanID)
-	appendOptionalInt64(builders[SubIDIdx].(*array.Int64Builder), level.SubID)
-	builders[TsMicrosIdx].(*array.Int64Builder).Append(level.RecvTS)
-	builders[ConfFlagsIdx].(*array.Int64Builder).Append(level.ConfFlags)
 	appendOptionalInt64(builders[SeqIdx].(*array.Int64Builder), level.Seq)
-	appendOptionalInt64(builders[SrvMTSIdx].(*array.Int64Builder), level.SrvMTS)
-	appendOptionalInt64(builders[WSTSIdx].(*array.Int64Builder), level.WSTS)
 	builders[RecvTSIdx].(*array.Int64Builder).Append(level.RecvTS)
-	appendOptionalInt64(builders[BatchIDIdx].(*array.Int64Builder), level.BatchID)
-	builders[IngestIDIdx].(*array.StringBuilder).Append(level.IngestID)
-	builders[SourceFileIdx].(*array.StringBuilder).Append(level.SourceFile)
-	appendOptionalInt64(builders[LineNoIdx].(*array.Int64Builder), level.LineNo)
 
-	// Book level specific fields
-	builders[17].(*array.Float64Builder).Append(level.Price)
-	builders[18].(*array.Int32Builder).Append(level.Count)
-	builders[19].(*array.Float64Builder).Append(level.Amount)
-	builders[20].(*array.StringBuilder).Append(string(level.Side))
-	builders[21].(*array.StringBuilder).Append(level.Prec)
-	builders[22].(*array.StringBuilder).Append(level.Freq)
-	builders[23].(*array.Int32Builder).Append(level.Len)
-	builders[24].(*array.BooleanBuilder).Append(level.IsSnapshot)
+	// Book level specific fields (starting at index 4)
+	// batch_id, price, count, amount, side, is_snapshot
+	appendOptionalInt64(builders[4].(*array.Int64Builder), level.BatchID)
+	builders[5].(*array.Float64Builder).Append(level.Price)
+	builders[6].(*array.Int32Builder).Append(level.Count)
+	builders[7].(*array.Float64Builder).Append(level.Amount)
+	builders[8].(*array.StringBuilder).Append(string(level.Side))
+	builders[9].(*array.BooleanBuilder).Append(level.IsSnapshot)
 
 	cw.RowCount++
 
@@ -118,32 +94,20 @@ func (cw *ChannelWriter) writeTrade(trade *schema.Trade) error {
 	// Add data to builders
 	builders := cw.Builder.builders
 
-	// Common fields
-	builders[ExchangeIdx].(*array.StringBuilder).Append(string(trade.Exchange))
-	builders[ChannelIdx].(*array.StringBuilder).Append(string(trade.Channel))
+	// Common fields (4 fields total: symbol, pair_or_currency, seq, recv_ts)
 	builders[SymbolIdx].(*array.StringBuilder).Append(trade.Symbol)
 	builders[PairOrCurrencyIdx].(*array.StringBuilder).Append(trade.PairOrCurrency)
-	builders[ConnIDIdx].(*array.StringBuilder).Append(trade.ConnID)
-	builders[ChanIDIdx].(*array.Int32Builder).Append(trade.ChanID)
-	appendOptionalInt64(builders[SubIDIdx].(*array.Int64Builder), trade.SubID)
-	builders[TsMicrosIdx].(*array.Int64Builder).Append(trade.RecvTS)
-	builders[ConfFlagsIdx].(*array.Int64Builder).Append(trade.ConfFlags)
 	appendOptionalInt64(builders[SeqIdx].(*array.Int64Builder), trade.Seq)
-	appendOptionalInt64(builders[SrvMTSIdx].(*array.Int64Builder), trade.SrvMTS)
-	appendOptionalInt64(builders[WSTSIdx].(*array.Int64Builder), trade.WSTS)
 	builders[RecvTSIdx].(*array.Int64Builder).Append(trade.RecvTS)
-	appendOptionalInt64(builders[BatchIDIdx].(*array.Int64Builder), trade.BatchID)
-	builders[IngestIDIdx].(*array.StringBuilder).Append(trade.IngestID)
-	builders[SourceFileIdx].(*array.StringBuilder).Append(trade.SourceFile)
-	appendOptionalInt64(builders[LineNoIdx].(*array.Int64Builder), trade.LineNo)
 
-	// Trade specific fields
-	builders[17].(*array.Int64Builder).Append(trade.TradeID)
-	builders[18].(*array.Int64Builder).Append(trade.MTS)
-	builders[19].(*array.Float64Builder).Append(trade.Amount)
-	builders[20].(*array.Float64Builder).Append(trade.Price)
-	builders[21].(*array.StringBuilder).Append(string(trade.MsgType))
-	builders[22].(*array.BooleanBuilder).Append(trade.IsSnapshot)
+	// Trade specific fields (starting at index 4)
+	// trade_id, mts, amount, price, msg_type, is_snapshot
+	builders[4].(*array.Int64Builder).Append(trade.TradeID)
+	builders[5].(*array.Int64Builder).Append(trade.MTS)
+	builders[6].(*array.Float64Builder).Append(trade.Amount)
+	builders[7].(*array.Float64Builder).Append(trade.Price)
+	builders[8].(*array.StringBuilder).Append(string(trade.MsgType))
+	builders[9].(*array.BooleanBuilder).Append(trade.IsSnapshot)
 
 	cw.RowCount++
 
@@ -166,36 +130,61 @@ func (cw *ChannelWriter) writeTicker(ticker *schema.Ticker) error {
 	// Add data to builders
 	builders := cw.Builder.builders
 
-	// Common fields
-	builders[ExchangeIdx].(*array.StringBuilder).Append(string(ticker.Exchange))
-	builders[ChannelIdx].(*array.StringBuilder).Append(string(ticker.Channel))
+	// Common fields (4 fields total: symbol, pair_or_currency, seq, recv_ts)
 	builders[SymbolIdx].(*array.StringBuilder).Append(ticker.Symbol)
 	builders[PairOrCurrencyIdx].(*array.StringBuilder).Append(ticker.PairOrCurrency)
-	builders[ConnIDIdx].(*array.StringBuilder).Append(ticker.ConnID)
-	builders[ChanIDIdx].(*array.Int32Builder).Append(ticker.ChanID)
-	appendOptionalInt64(builders[SubIDIdx].(*array.Int64Builder), ticker.SubID)
-	builders[TsMicrosIdx].(*array.Int64Builder).Append(ticker.RecvTS)
-	builders[ConfFlagsIdx].(*array.Int64Builder).Append(ticker.ConfFlags)
 	appendOptionalInt64(builders[SeqIdx].(*array.Int64Builder), ticker.Seq)
-	appendOptionalInt64(builders[SrvMTSIdx].(*array.Int64Builder), ticker.SrvMTS)
-	appendOptionalInt64(builders[WSTSIdx].(*array.Int64Builder), ticker.WSTS)
 	builders[RecvTSIdx].(*array.Int64Builder).Append(ticker.RecvTS)
-	appendOptionalInt64(builders[BatchIDIdx].(*array.Int64Builder), ticker.BatchID)
-	builders[IngestIDIdx].(*array.StringBuilder).Append(ticker.IngestID)
-	builders[SourceFileIdx].(*array.StringBuilder).Append(ticker.SourceFile)
-	appendOptionalInt64(builders[LineNoIdx].(*array.Int64Builder), ticker.LineNo)
 
-	// Ticker specific fields
-	builders[17].(*array.Float64Builder).Append(ticker.Bid)
-	builders[18].(*array.Float64Builder).Append(ticker.BidSize)
-	builders[19].(*array.Float64Builder).Append(ticker.Ask)
-	builders[20].(*array.Float64Builder).Append(ticker.AskSize)
-	builders[21].(*array.Float64Builder).Append(ticker.Last)
-	builders[22].(*array.Float64Builder).Append(ticker.Vol)
-	builders[23].(*array.Float64Builder).Append(ticker.High)
-	builders[24].(*array.Float64Builder).Append(ticker.Low)
-	builders[25].(*array.Float64Builder).Append(ticker.DailyChange)
-	builders[26].(*array.Float64Builder).Append(ticker.DailyChangeRel)
+	// Ticker specific fields (starting at index 4)
+	// bid, bid_sz, ask, ask_sz, last, vol, high, low, daily_change, daily_change_rel
+	builders[4].(*array.Float64Builder).Append(ticker.Bid)
+	builders[5].(*array.Float64Builder).Append(ticker.BidSize)
+	builders[6].(*array.Float64Builder).Append(ticker.Ask)
+	builders[7].(*array.Float64Builder).Append(ticker.AskSize)
+	builders[8].(*array.Float64Builder).Append(ticker.Last)
+	builders[9].(*array.Float64Builder).Append(ticker.Vol)
+	builders[10].(*array.Float64Builder).Append(ticker.High)
+	builders[11].(*array.Float64Builder).Append(ticker.Low)
+	builders[12].(*array.Float64Builder).Append(ticker.DailyChange)
+	builders[13].(*array.Float64Builder).Append(ticker.DailyChangeRel)
+
+	cw.RowCount++
+
+	// Write record batch if we have enough rows
+	if cw.RowCount%100 == 0 {
+		return cw.writeRecordBatch()
+	}
+
+	return nil
+}
+
+func (cw *ChannelWriter) writeCandle(candle *schema.Candle) error {
+	cw.Mutex.Lock()
+	defer cw.Mutex.Unlock()
+
+	if !cw.IsOpen {
+		return fmt.Errorf("writer is closed")
+	}
+
+	// Add data to builders
+	builders := cw.Builder.builders
+
+	// Common fields (4 fields total: symbol, pair_or_currency, seq, recv_ts)
+	builders[SymbolIdx].(*array.StringBuilder).Append(candle.Symbol)
+	builders[PairOrCurrencyIdx].(*array.StringBuilder).Append(candle.PairOrCurrency)
+	appendOptionalInt64(builders[SeqIdx].(*array.Int64Builder), candle.Seq)
+	builders[RecvTSIdx].(*array.Int64Builder).Append(candle.RecvTS)
+
+	// Candle specific fields (starting at index 4)
+	// mts, open, close, high, low, volume, is_snapshot
+	builders[4].(*array.Int64Builder).Append(candle.MTS)
+	builders[5].(*array.Float64Builder).Append(candle.Open)
+	builders[6].(*array.Float64Builder).Append(candle.Close)
+	builders[7].(*array.Float64Builder).Append(candle.High)
+	builders[8].(*array.Float64Builder).Append(candle.Low)
+	builders[9].(*array.Float64Builder).Append(candle.Volume)
+	builders[10].(*array.BooleanBuilder).Append(candle.IsSnapshot)
 
 	cw.RowCount++
 
@@ -270,6 +259,10 @@ func (cw *ChannelWriter) close() error {
 		if err := cw.writeRecordBatch(); err != nil {
 			return fmt.Errorf("failed to write final batch: %w", err)
 		}
+	}
+
+	if cw.Metadata != nil {
+		cw.Metadata.DatetimeEnd = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	// Close Arrow writer

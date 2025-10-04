@@ -88,6 +88,6 @@ exchanges:
       last_used_profile: "default"
       profiles:
         default:
-          path: "bitfinex_config.yml"
+          path: "exchanges/bitfinex.yml"
           description: "Default Bitfinex configuration"
           is_default: true

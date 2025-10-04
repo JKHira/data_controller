@@ -15,6 +15,7 @@ const (
 	ChannelTrades   Channel = "trades"
 	ChannelBooks    Channel = "books"
 	ChannelRawBooks Channel = "raw_books"
+	ChannelCandles  Channel = "candles"
 )
 
 type MessageType string
@@ -41,36 +42,45 @@ const (
 )
 
 type CommonFields struct {
-	Exchange        Exchange `parquet:"exchange,plain"`
-	Channel         Channel  `parquet:"channel,plain"`
-	Symbol          string   `parquet:"symbol,plain"`
-	PairOrCurrency  string   `parquet:"pair_or_currency,plain"`
-	ConnID          string   `parquet:"conn_id,plain"`
-	ChanID          int32    `parquet:"chan_id,plain"`
-	SubID           *int64   `parquet:"sub_id,optional"`
-	ConfFlags       int64    `parquet:"conf_flags,plain"`
-	Seq             *int64   `parquet:"seq,optional"`
-	SrvMTS          *int64   `parquet:"srv_mts,optional"`
-	WSTS            *int64   `parquet:"ws_ts,optional"`
-	RecvTS          int64    `parquet:"recv_ts,plain"`
-	BatchID         *int64   `parquet:"batch_id,optional"`
-	IngestID        string   `parquet:"ingest_id,plain"`
-	SourceFile      string   `parquet:"source_file,plain"`
-	LineNo          *int64   `parquet:"line_no,optional"`
+	Symbol         string  `parquet:"symbol,plain"`
+	PairOrCurrency string  `parquet:"pair_or_currency,plain"`
+	Seq            *int64  `parquet:"seq,optional"`
+	RecvTS         int64   `parquet:"recv_ts,plain"`
+	ChanID         int32   `parquet:"-"`
+	Channel        Channel `parquet:"-"`
+	ChannelKey     string  `parquet:"-"`
+	Timeframe      string  `parquet:"-"`
+	BookPrec       string  `parquet:"-"`
+	BookFreq       string  `parquet:"-"`
+	BookLen        string  `parquet:"-"`
+}
+
+type ChannelMetadata struct {
+	Channel   Channel
+	Symbol    string
+	Pair      string
+	Key       string
+	ChanID    int32
+	Timeframe string
+	BookPrec  string
+	BookFreq  string
+	BookLen   string
 }
 
 type RawBookEvent struct {
 	CommonFields
-	OrderID     int64     `parquet:"order_id,plain"`
-	Price       float64   `parquet:"price,plain"`
-	Amount      float64   `parquet:"amount,plain"`
-	Op          Operation `parquet:"op,plain"`
-	Side        Side      `parquet:"side,plain"`
-	IsSnapshot  bool      `parquet:"is_snapshot,plain"`
+	BatchID    *int64    `parquet:"batch_id,optional"`
+	OrderID    int64     `parquet:"order_id,plain"`
+	Price      float64   `parquet:"price,plain"`
+	Amount     float64   `parquet:"amount,plain"`
+	Op         Operation `parquet:"op,plain"`
+	Side       Side      `parquet:"side,plain"`
+	IsSnapshot bool      `parquet:"is_snapshot,plain"`
 }
 
 type BookLevel struct {
 	CommonFields
+	BatchID    *int64  `parquet:"batch_id,optional"`
 	Price      float64 `parquet:"price,plain"`
 	Count      int32   `parquet:"count,plain"`
 	Amount     float64 `parquet:"amount,plain"`
@@ -83,26 +93,38 @@ type BookLevel struct {
 
 type Trade struct {
 	CommonFields
-	TradeID     int64       `parquet:"trade_id,plain"`
-	MTS         int64       `parquet:"mts,plain"`
-	Amount      float64     `parquet:"amount,plain"`
-	Price       float64     `parquet:"price,plain"`
-	MsgType     MessageType `parquet:"msg_type,plain"`
-	IsSnapshot  bool        `parquet:"is_snapshot,plain"`
+	TradeID    int64       `parquet:"trade_id,plain"`
+	MTS        int64       `parquet:"mts,plain"`
+	Amount     float64     `parquet:"amount,plain"`
+	Price      float64     `parquet:"price,plain"`
+	MsgType    MessageType `parquet:"msg_type,plain"`
+	IsSnapshot bool        `parquet:"is_snapshot,plain"`
 }
 
 type Ticker struct {
 	CommonFields
-	Bid              float64 `parquet:"bid,plain"`
-	BidSize          float64 `parquet:"bid_sz,plain"`
-	Ask              float64 `parquet:"ask,plain"`
-	AskSize          float64 `parquet:"ask_sz,plain"`
-	Last             float64 `parquet:"last,plain"`
-	Vol              float64 `parquet:"vol,plain"`
-	High             float64 `parquet:"high,plain"`
-	Low              float64 `parquet:"low,plain"`
-	DailyChange      float64 `parquet:"daily_change,plain"`
-	DailyChangeRel   float64 `parquet:"daily_change_rel,plain"`
+	Bid            float64 `parquet:"bid,plain"`
+	BidSize        float64 `parquet:"bid_sz,plain"`
+	Ask            float64 `parquet:"ask,plain"`
+	AskSize        float64 `parquet:"ask_sz,plain"`
+	Last           float64 `parquet:"last,plain"`
+	Vol            float64 `parquet:"vol,plain"`
+	High           float64 `parquet:"high,plain"`
+	Low            float64 `parquet:"low,plain"`
+	DailyChange    float64 `parquet:"daily_change,plain"`
+	DailyChangeRel float64 `parquet:"daily_change_rel,plain"`
+}
+
+type Candle struct {
+	CommonFields
+	MTS        int64   `parquet:"mts,plain"`
+	Open       float64 `parquet:"open,plain"`
+	Close      float64 `parquet:"close,plain"`
+	High       float64 `parquet:"high,plain"`
+	Low        float64 `parquet:"low,plain"`
+	Volume     float64 `parquet:"volume,plain"`
+	Timeframe  string  `parquet:"timeframe,plain"`
+	IsSnapshot bool    `parquet:"is_snapshot,plain"`
 }
 
 type Control struct {
@@ -115,20 +137,20 @@ type Control struct {
 }
 
 type SegmentManifest struct {
-	SchemaVersion    string            `json:"schema_version"`
-	Exchange         string            `json:"exchange"`
-	Channel          string            `json:"channel"`
-	Symbol           string            `json:"symbol"`
-	PairOrCurrency   string            `json:"pair_or_currency"`
-	WSURL            string            `json:"ws_url"`
-	ConnID           string            `json:"conn_id"`
-	ChanID           int32             `json:"chan_id"`
-	SubID            *int64            `json:"sub_id,omitempty"`
-	ConfFlags        int64             `json:"conf_flags"`
-	Book             *BookSubscription `json:"book,omitempty"`
-	Segment          SegmentInfo       `json:"segment"`
-	Seq              *SeqInfo          `json:"seq,omitempty"`
-	Quality          QualityMetrics    `json:"quality"`
+	SchemaVersion  string            `json:"schema_version"`
+	Exchange       string            `json:"exchange"`
+	Channel        string            `json:"channel"`
+	Symbol         string            `json:"symbol"`
+	PairOrCurrency string            `json:"pair_or_currency"`
+	WSURL          string            `json:"ws_url"`
+	ConnID         string            `json:"conn_id"`
+	ChanID         int32             `json:"chan_id"`
+	SubID          *int64            `json:"sub_id,omitempty"`
+	ConfFlags      int64             `json:"conf_flags"`
+	Book           *BookSubscription `json:"book,omitempty"`
+	Segment        SegmentInfo       `json:"segment"`
+	Seq            *SeqInfo          `json:"seq,omitempty"`
+	Quality        QualityMetrics    `json:"quality"`
 }
 
 type BookSubscription struct {
@@ -151,8 +173,8 @@ type SeqInfo struct {
 
 type QualityMetrics struct {
 	ChecksumMismatch        int `json:"checksum_mismatch"`
-	HBMissed               int `json:"hb_missed"`
-	Reconnects             int `json:"reconnects"`
-	TradesDedupDropped     int `json:"trades_dedup_dropped"`
+	HBMissed                int `json:"hb_missed"`
+	Reconnects              int `json:"reconnects"`
+	TradesDedupDropped      int `json:"trades_dedup_dropped"`
 	BookUpdatesDedupDropped int `json:"book_updates_dedup_dropped"`
 }

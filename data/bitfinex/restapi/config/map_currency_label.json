@@ -1,1 +1,748 @@
-[[["AAVE","AAVE"],["ADA","Cardano ADA"],["AIOZ","AIOZ Network"],["ALG","Algorand"],["ALT11M2507","ALT11M2507"],["ALT11M250830","ALT11M250830"],["ALT11M251029","ALT11M251029"],["ALT2612","ALT2612"],["AMP","Ampleforth"],["APE","ApeCoin"],["APENFT","APENFT"],["APT","Aptos"],["ARB","Arbitrum"],["ARBETH","Ethereum (Arbitrum One)"],["ATH","Aethir"],["ATO","Cosmos-Atom"],["AUSDT","aUSDT"],["AVAX","Avalanche"],["B2M","Bit2Me"],["BCH","Bitcoin Cash"],["BCHN","Bitcoin Cash"],["BFX","BFX Token"],["BGB","Bitget Token"],["BMN","Blockstream Mining Note"],["BMN2","BMN2"],["BONK","BONK"],["BTC","Bitcoin"],["BTCF0","Bitcoin"],["BTT","BitTorrent"],["CELO","Celo"],["CHF","Swiss Franc"],["CHZ","socios.com Chiliz"],["CNHT","Tether CNHt"],["COMP","Compound"],["CRV","Curve"],["DAI","Dai Stablecoin"],["DOGE","DOGE"],["DOT","Polkadot"],["DSH","Dash"],["DYM","Dymension"],["EGLD","Elrond"],["EIGEN","EigenLayer"],["ENA","Ethena Labs"],["ENYM","Nym (Ethereum)"],["EOS","Vaulta"],["ETC","Ethereum Classic"],["ETH","Ethereum"],["ETHS","ETHS"],["EUE","EURt (ETH)"],["EUR","Euro"],["EURQ","Quantoz EURQ"],["EURR","EURR"],["EUT","Tether EURt"],["EXRD","E-RADIX"],["FET","Artificial Super Intelligence"],["FIL","Filecoin"],["FLOKI","FLOKI"],["GALA","Gala"],["GBP","Pound Sterling"],["GOMINING","GoMining"],["GTX","Gate.IO"],["GUN","GUNZ"],["HIX","Hi Dollar"],["HKD","Hong Kong Dollar"],["HTXDAO","HTXDAO"],["HYPE","Hyperliquid"],["ICP","Dfinity"],["IOT","Iota"],["JASMY","Jasmy"],["JPY","Japanese Yen"],["JST","JST"],["JUP","Jupiter"],["JUSTICE","AssangeDAO"],["JXX","Jambo"],["KAIA","KAIA"],["KAN","BitKan"],["KAVA","KAVA"],["LBT","Bitcoin (Liquid)"],["LDO","Lido"],["LEO","Unus Sed LEO"],["LES","Unus Sed LEO (Vaulta)"],["LET","Unus Sed LEO (ERC20)"],["LIFIII","LIF3"],["LINK","ChainLink"],["LNX","Bitcoin (Lightning Network)"],["LTC","Litecoin"],["MEW","cat in a dogs world"],["MIM","Magic Internet Money"],["MKR","Maker"],["MNT","Mantle"],["MODEETH","Ethereum (Mode Network)"],["MXNT","Tether MXNt"],["MXNTE","MXNt (ETH)"],["NEAR","Near"],["NEO","NEO"],["NEOGAS","NEOGAS"],["NEXO","NEXO"],["NYM","Nym"],["OMN","Omni"],["OPX","Optimism"],["PEPE","PEPE"],["PNK","Kleros"],["POL","Polygon Ecosystem Token (Ethereum)"],["POLM","Polygon Ecosystem Token (Polygon)"],["RRT","Recovery Right Tokens"],["SEI","Sei Network"],["SHIB","SHIB"],["SHM","Shardeum"],["SKY","Sky"],["SOL","Solana"],["SONIC","Sonic"],["SPEC","Spectral"],["SPELL","SPELL"],["STG","Stargate Finance"],["STRK","Starknet"],["STX","Stacks"],["SUI","SUI"],["SUN","SUN"],["SUSHI","SUSHI"],["SWEAT","SWEAT"],["SWEATNEP","SWEAT (NEP-141)"],["TAIKOETH","Ethereum (Taiko)"],["TESTBTC","Bitcoin"],["TESTDOT","Polkadot"],["TESTSOL","Solana"],["TESTUSD","US Dollar"],["TESTUSDT","Tether USDt"],["TESTUSDTF0","Tether USDt"],["TIA","Celestia"],["TITAN1","TITAN1"],["TITAN2","TITAN2"],["TOKEN","TokenFi"],["TON","Toncoin"],["TRX","TRON"],["TRY","Turkish Lira"],["TSD","TrueUSD"],["UDC","USDc"],["UNI","Uniswap"],["UOS","Ultra"],["USD","US Dollar"],["USDF","Falcon USD"],["USDQ","Quantoz USDQ"],["USDR","USDR"],["USDT0ARB","USDT0 (Arbitrum One)"],["USDT0INK","USDT0 (Ink)"],["USDT0OPX","USDT0 (Optimism)"],["USDT0XPL","USDT0 (Plasma)"],["USDTAPT","USDt (Aptos)"],["USDTAVAX","USDt (AVAX-C)"],["USDTCELO","USDt (Celo)"],["USDTDOT","USDt (Polkadot)"],["USDTKAIA","USDt (KAIA)"],["USDTKAVA","USDt (Kava)"],["USDTNEAR","USDt (Near)"],["USDTPLY","USDt (Polygon)"],["USDTSOL","USDt (SOL)"],["USDTTON","USDt (Ton)"],["USDTXTZ","USDt (Tezos)"],["USDTZK","USDt (zkEVM)"],["USE","USDt (ETH)"],["USL","USDt (Liquid)"],["UST","Tether USDt"],["USTBL","USTBL"],["USTF0","Tether USDt"],["USX","USDt (Tron)"],["UXLINK","UXLINK"],["WBT","Wrapped Bitcoin"],["WHBT","WhiteBIT Token"],["WIF","Dogwifhat"],["WOO","WOO"],["XAUT","Tether XAUt"],["XAUT0TON","XAUT0 (Toncoin)"],["XAUTE","XAUTe"],["XAUTZK","XAUt (zkEVM)"],["XDC","XinFin"],["XLM","Stellar Lumen"],["XMR","Monero"],["XPL","Plasma"],["XRD","RADIX"],["XRP","Ripple"],["XTZ","Tezos"],["YFI","Yearn.Finance"],["ZEC","Zcash"],["ZKX","zkSync"],["ZRO","LayerZero"],["ZRX","0x"]]]
+[
+  [
+    [
+      "AAVE",
+      "AAVE"
+    ],
+    [
+      "ADA",
+      "Cardano ADA"
+    ],
+    [
+      "AIOZ",
+      "AIOZ Network"
+    ],
+    [
+      "ALG",
+      "Algorand"
+    ],
+    [
+      "ALT11M2507",
+      "ALT11M2507"
+    ],
+    [
+      "ALT11M250830",
+      "ALT11M250830"
+    ],
+    [
+      "ALT11M251029",
+      "ALT11M251029"
+    ],
+    [
+      "ALT2612",
+      "ALT2612"
+    ],
+    [
+      "AMP",
+      "Ampleforth"
+    ],
+    [
+      "APE",
+      "ApeCoin"
+    ],
+    [
+      "APENFT",
+      "APENFT"
+    ],
+    [
+      "APT",
+      "Aptos"
+    ],
+    [
+      "ARB",
+      "Arbitrum"
+    ],
+    [
+      "ARBETH",
+      "Ethereum (Arbitrum One)"
+    ],
+    [
+      "ATH",
+      "Aethir"
+    ],
+    [
+      "ATO",
+      "Cosmos-Atom"
+    ],
+    [
+      "AUSDT",
+      "aUSDT"
+    ],
+    [
+      "AVAX",
+      "Avalanche"
+    ],
+    [
+      "B2M",
+      "Bit2Me"
+    ],
+    [
+      "BCH",
+      "Bitcoin Cash"
+    ],
+    [
+      "BCHN",
+      "Bitcoin Cash"
+    ],
+    [
+      "BFX",
+      "BFX Token"
+    ],
+    [
+      "BGB",
+      "Bitget Token"
+    ],
+    [
+      "BMN",
+      "Blockstream Mining Note"
+    ],
+    [
+      "BMN2",
+      "BMN2"
+    ],
+    [
+      "BONK",
+      "BONK"
+    ],
+    [
+      "BTC",
+      "Bitcoin"
+    ],
+    [
+      "BTCF0",
+      "Bitcoin"
+    ],
+    [
+      "BTT",
+      "BitTorrent"
+    ],
+    [
+      "CELO",
+      "Celo"
+    ],
+    [
+      "CHF",
+      "Swiss Franc"
+    ],
+    [
+      "CHZ",
+      "socios.com Chiliz"
+    ],
+    [
+      "CNHT",
+      "Tether CNHt"
+    ],
+    [
+      "COMP",
+      "Compound"
+    ],
+    [
+      "CRV",
+      "Curve"
+    ],
+    [
+      "DAI",
+      "Dai Stablecoin"
+    ],
+    [
+      "DOGE",
+      "DOGE"
+    ],
+    [
+      "DOT",
+      "Polkadot"
+    ],
+    [
+      "DSH",
+      "Dash"
+    ],
+    [
+      "DYM",
+      "Dymension"
+    ],
+    [
+      "EGLD",
+      "Elrond"
+    ],
+    [
+      "EIGEN",
+      "EigenLayer"
+    ],
+    [
+      "ENA",
+      "Ethena Labs"
+    ],
+    [
+      "ENYM",
+      "Nym (Ethereum)"
+    ],
+    [
+      "EOS",
+      "Vaulta"
+    ],
+    [
+      "ETC",
+      "Ethereum Classic"
+    ],
+    [
+      "ETH",
+      "Ethereum"
+    ],
+    [
+      "ETHS",
+      "ETHS"
+    ],
+    [
+      "EUE",
+      "EURt (ETH)"
+    ],
+    [
+      "EUR",
+      "Euro"
+    ],
+    [
+      "EURQ",
+      "Quantoz EURQ"
+    ],
+    [
+      "EURR",
+      "EURR"
+    ],
+    [
+      "EUT",
+      "Tether EURt"
+    ],
+    [
+      "EXRD",
+      "E-RADIX"
+    ],
+    [
+      "FET",
+      "Artificial Super Intelligence"
+    ],
+    [
+      "FIL",
+      "Filecoin"
+    ],
+    [
+      "FLOKI",
+      "FLOKI"
+    ],
+    [
+      "GALA",
+      "Gala"
+    ],
+    [
+      "GBP",
+      "Pound Sterling"
+    ],
+    [
+      "GOMINING",
+      "GoMining"
+    ],
+    [
+      "GTX",
+      "Gate.IO"
+    ],
+    [
+      "GUN",
+      "GUNZ"
+    ],
+    [
+      "HIX",
+      "Hi Dollar"
+    ],
+    [
+      "HKD",
+      "Hong Kong Dollar"
+    ],
+    [
+      "HTXDAO",
+      "HTXDAO"
+    ],
+    [
+      "HYPE",
+      "Hyperliquid"
+    ],
+    [
+      "ICP",
+      "Dfinity"
+    ],
+    [
+      "IOT",
+      "Iota"
+    ],
+    [
+      "JASMY",
+      "Jasmy"
+    ],
+    [
+      "JPY",
+      "Japanese Yen"
+    ],
+    [
+      "JST",
+      "JST"
+    ],
+    [
+      "JUP",
+      "Jupiter"
+    ],
+    [
+      "JUSTICE",
+      "AssangeDAO"
+    ],
+    [
+      "JXX",
+      "Jambo"
+    ],
+    [
+      "KAIA",
+      "KAIA"
+    ],
+    [
+      "KAN",
+      "BitKan"
+    ],
+    [
+      "KAVA",
+      "KAVA"
+    ],
+    [
+      "LBT",
+      "Bitcoin (Liquid)"
+    ],
+    [
+      "LDO",
+      "Lido"
+    ],
+    [
+      "LEO",
+      "Unus Sed LEO"
+    ],
+    [
+      "LES",
+      "Unus Sed LEO (Vaulta)"
+    ],
+    [
+      "LET",
+      "Unus Sed LEO (ERC20)"
+    ],
+    [
+      "LIFIII",
+      "LIF3"
+    ],
+    [
+      "LINK",
+      "ChainLink"
+    ],
+    [
+      "LNX",
+      "Bitcoin (Lightning Network)"
+    ],
+    [
+      "LTC",
+      "Litecoin"
+    ],
+    [
+      "MEW",
+      "cat in a dogs world"
+    ],
+    [
+      "MIM",
+      "Magic Internet Money"
+    ],
+    [
+      "MKR",
+      "Maker"
+    ],
+    [
+      "MNT",
+      "Mantle"
+    ],
+    [
+      "MODEETH",
+      "Ethereum (Mode Network)"
+    ],
+    [
+      "MXNT",
+      "Tether MXNt"
+    ],
+    [
+      "MXNTE",
+      "MXNt (ETH)"
+    ],
+    [
+      "NEAR",
+      "Near"
+    ],
+    [
+      "NEO",
+      "NEO"
+    ],
+    [
+      "NEOGAS",
+      "NEOGAS"
+    ],
+    [
+      "NEXO",
+      "NEXO"
+    ],
+    [
+      "NYM",
+      "Nym"
+    ],
+    [
+      "OMN",
+      "Omni"
+    ],
+    [
+      "OPX",
+      "Optimism"
+    ],
+    [
+      "PEPE",
+      "PEPE"
+    ],
+    [
+      "PNK",
+      "Kleros"
+    ],
+    [
+      "POL",
+      "Polygon Ecosystem Token (Ethereum)"
+    ],
+    [
+      "POLM",
+      "Polygon Ecosystem Token (Polygon)"
+    ],
+    [
+      "RRT",
+      "Recovery Right Tokens"
+    ],
+    [
+      "SEI",
+      "Sei Network"
+    ],
+    [
+      "SHIB",
+      "SHIB"
+    ],
+    [
+      "SHM",
+      "Shardeum"
+    ],
+    [
+      "SKY",
+      "Sky"
+    ],
+    [
+      "SOL",
+      "Solana"
+    ],
+    [
+      "SONIC",
+      "Sonic"
+    ],
+    [
+      "SPEC",
+      "Spectral"
+    ],
+    [
+      "SPELL",
+      "SPELL"
+    ],
+    [
+      "STG",
+      "Stargate Finance"
+    ],
+    [
+      "STRK",
+      "Starknet"
+    ],
+    [
+      "STX",
+      "Stacks"
+    ],
+    [
+      "SUI",
+      "SUI"
+    ],
+    [
+      "SUN",
+      "SUN"
+    ],
+    [
+      "SUSHI",
+      "SUSHI"
+    ],
+    [
+      "SWEAT",
+      "SWEAT"
+    ],
+    [
+      "SWEATNEP",
+      "SWEAT (NEP-141)"
+    ],
+    [
+      "TAIKOETH",
+      "Ethereum (Taiko)"
+    ],
+    [
+      "TESTBTC",
+      "Bitcoin"
+    ],
+    [
+      "TESTDOT",
+      "Polkadot"
+    ],
+    [
+      "TESTSOL",
+      "Solana"
+    ],
+    [
+      "TESTUSD",
+      "US Dollar"
+    ],
+    [
+      "TESTUSDT",
+      "Tether USDt"
+    ],
+    [
+      "TESTUSDTF0",
+      "Tether USDt"
+    ],
+    [
+      "TIA",
+      "Celestia"
+    ],
+    [
+      "TITAN1",
+      "TITAN1"
+    ],
+    [
+      "TITAN2",
+      "TITAN2"
+    ],
+    [
+      "TOKEN",
+      "TokenFi"
+    ],
+    [
+      "TON",
+      "Toncoin"
+    ],
+    [
+      "TRX",
+      "TRON"
+    ],
+    [
+      "TRY",
+      "Turkish Lira"
+    ],
+    [
+      "TSD",
+      "TrueUSD"
+    ],
+    [
+      "UDC",
+      "USDc"
+    ],
+    [
+      "UNI",
+      "Uniswap"
+    ],
+    [
+      "UOS",
+      "Ultra"
+    ],
+    [
+      "USD",
+      "US Dollar"
+    ],
+    [
+      "USDF",
+      "Falcon USD"
+    ],
+    [
+      "USDQ",
+      "Quantoz USDQ"
+    ],
+    [
+      "USDR",
+      "USDR"
+    ],
+    [
+      "USDT0ARB",
+      "USDT0 (Arbitrum One)"
+    ],
+    [
+      "USDT0INK",
+      "USDT0 (Ink)"
+    ],
+    [
+      "USDT0OPX",
+      "USDT0 (Optimism)"
+    ],
+    [
+      "USDT0XPL",
+      "USDT0 (Plasma)"
+    ],
+    [
+      "USDTAPT",
+      "USDt (Aptos)"
+    ],
+    [
+      "USDTAVAX",
+      "USDt (AVAX-C)"
+    ],
+    [
+      "USDTCELO",
+      "USDt (Celo)"
+    ],
+    [
+      "USDTDOT",
+      "USDt (Polkadot)"
+    ],
+    [
+      "USDTKAIA",
+      "USDt (KAIA)"
+    ],
+    [
+      "USDTKAVA",
+      "USDt (Kava)"
+    ],
+    [
+      "USDTNEAR",
+      "USDt (Near)"
+    ],
+    [
+      "USDTPLY",
+      "USDt (Polygon)"
+    ],
+    [
+      "USDTSOL",
+      "USDt (SOL)"
+    ],
+    [
+      "USDTTON",
+      "USDt (Ton)"
+    ],
+    [
+      "USDTXTZ",
+      "USDt (Tezos)"
+    ],
+    [
+      "USDTZK",
+      "USDt (zkEVM)"
+    ],
+    [
+      "USE",
+      "USDt (ETH)"
+    ],
+    [
+      "USL",
+      "USDt (Liquid)"
+    ],
+    [
+      "UST",
+      "Tether USDt"
+    ],
+    [
+      "USTBL",
+      "USTBL"
+    ],
+    [
+      "USTF0",
+      "Tether USDt"
+    ],
+    [
+      "USX",
+      "USDt (Tron)"
+    ],
+    [
+      "UXLINK",
+      "UXLINK"
+    ],
+    [
+      "WBT",
+      "Wrapped Bitcoin"
+    ],
+    [
+      "WHBT",
+      "WhiteBIT Token"
+    ],
+    [
+      "WIF",
+      "Dogwifhat"
+    ],
+    [
+      "WOO",
+      "WOO"
+    ],
+    [
+      "XAUT",
+      "Tether XAUt"
+    ],
+    [
+      "XAUT0TON",
+      "XAUT0 (Toncoin)"
+    ],
+    [
+      "XAUTE",
+      "XAUTe"
+    ],
+    [
+      "XAUTZK",
+      "XAUt (zkEVM)"
+    ],
+    [
+      "XDC",
+      "XinFin"
+    ],
+    [
+      "XLM",
+      "Stellar Lumen"
+    ],
+    [
+      "XMR",
+      "Monero"
+    ],
+    [
+      "XPL",
+      "Plasma"
+    ],
+    [
+      "XRD",
+      "RADIX"
+    ],
+    [
+      "XRP",
+      "Ripple"
+    ],
+    [
+      "XTZ",
+      "Tezos"
+    ],
+    [
+      "YFI",
+      "Yearn.Finance"
+    ],
+    [
+      "ZEC",
+      "Zcash"
+    ],
+    [
+      "ZKX",
+      "zkSync"
+    ],
+    [
+      "ZRO",
+      "LayerZero"
+    ],
+    [
+      "ZRX",
+      "0x"
+    ]
+  ]
+]

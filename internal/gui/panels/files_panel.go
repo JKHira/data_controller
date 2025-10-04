@@ -99,7 +99,7 @@ func (fp *FilesPanel) createUI() {
 	fp.sourceSelect.SetSelected("websocket")
 	fp.sourceSelect.OnChanged = fp.onSourceChanged
 
-	fp.categorySelect = widget.NewSelect([]string{"trades", "ticker", "books", "raw_books", "All trades", "All books"}, nil)
+	fp.categorySelect = widget.NewSelect([]string{"trades", "ticker", "books", "raw_books", "candles", "All trades", "All books"}, nil)
 	fp.categorySelect.SetSelected("trades")
 	fp.categorySelect.OnChanged = fp.onCategoryChanged
 
@@ -205,13 +205,10 @@ func (fp *FilesPanel) GetContent() fyne.CanvasObject {
 	// Action buttons
 	buttonRow := container.NewHBox(fp.scanBtn, fp.loadBtn)
 
-	// Main layout
-	return container.NewVBox(
-		widget.NewCard("File Loader", "", filterForm),
-		buttonRow,
-		fp.statusLabel,
-		fp.filesList,
-	)
+	filterCard := widget.NewCard("File Loader", "", filterForm)
+	listScroll := container.NewVScroll(fp.filesList)
+	contentTop := container.NewVBox(filterCard, buttonRow, fp.statusLabel)
+	return container.NewBorder(contentTop, nil, nil, nil, listScroll)
 }
 
 // handleScan handles the scan button click (async)

@@ -16,8 +16,3 @@ func createDirIfNotExists(dir string) error {
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
-
-// renameFile renames a file (atomic operation)
-func renameFile(oldPath, newPath string) error {
-	return os.Rename(oldPath, newPath)
-}

@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 // CreateFileViewerPanel creates the file viewer panel with pagination controls
-func CreateFileViewerPanel(fileViewer *widget.Entry, prevBtn, nextBtn, closeBtn *widget.Button, pageLabel *widget.Label) fyne.CanvasObject {
+func CreateFileViewerPanel(fileViewer, metadataViewer *widget.Entry, prevBtn, nextBtn, closeBtn *widget.Button, pageLabel *widget.Label) fyne.CanvasObject {
 	// File viewer with controls - use Border layout for proper expansion
 	viewerControls := container.NewHBox(
 		prevBtn,
@@ -24,13 +25,17 @@ func CreateFileViewerPanel(fileViewer *widget.Entry, prevBtn, nextBtn, closeBtn 
 		widget.NewSeparator(),
 		closeBtn,
 	)
+	metadataScroll := container.NewVScroll(metadataViewer)
+	metadataScroll.SetMinSize(fyne.NewSize(220, 220))
+	metadataCard := widget.NewCard("📑 Metadata", "", metadataScroll)
 	viewerScroll := container.NewVScroll(fileViewer)
+	contentBody := container.NewBorder(metadataCard, nil, nil, nil, viewerScroll)
 	viewerContent := container.NewBorder(
 		viewerControls, // top
 		nil,            // bottom
 		nil,            // left
 		nil,            // right
-		viewerScroll,   // center (takes remaining space)
+		contentBody,
 	)
 	return widget.NewCard("👁️ File Viewer", "", viewerContent)
 }
@@ -47,84 +52,56 @@ func DisplayFileInfo(fileViewer *widget.Entry, filePath string) {
 
 // DisplayArrowData displays Arrow file data with pagination information
 func DisplayArrowData(fileViewer *widget.Entry, filePath string, summary map[string]interface{}, pageData *arrow.PageData) {
-	content := fmt.Sprintf("📊 Arrow File: %s\n", filepath.Base(filePath))
-	content += fmt.Sprintf("📏 File Size: %v bytes (%.2f MB)\n", summary["file_size"], float64(summary["file_size"].(int64))/(1024*1024))
-	content += fmt.Sprintf("📈 Total Records: %v\n", summary["total_records"])
-	content += fmt.Sprintf("📦 Batches: %v\n", summary["num_batches"])
-	content += fmt.Sprintf("📝 Columns: %v\n", summary["num_columns"])
-	content += fmt.Sprintf("📊 Data Read: %.2f MB / %.2f MB\n\n", float64(pageData.BytesRead)/(1024*1024), float64(pageData.TotalBytes)/(1024*1024))
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("📊 Arrow File: %s\n", filepath.Base(filePath)))
+	if size, ok := summary["file_size"].(int64); ok {
+		builder.WriteString(fmt.Sprintf("📏 File Size: %d bytes (%.2f MB)\n", size, float64(size)/(1024*1024)))
+	}
+	if val, ok := summary["total_records"]; ok {
+		builder.WriteString(fmt.Sprintf("📈 Total Records: %v\n", val))
+	}
+	builder.WriteString(fmt.Sprintf("📊 Data Read: %.2f MB / %.2f MB\n", float64(pageData.BytesRead)/(1024*1024), float64(pageData.TotalBytes)/(1024*1024)))
+	builder.WriteString(fmt.Sprintf("📄 Chunk %d/%d (~10MB per chunk)\n", pageData.PageNumber, pageData.TotalPages))
+	builder.WriteString(fmt.Sprintf("📊 Records in this chunk: %d\n", len(pageData.Records)))
+	builder.WriteString(fmt.Sprintf("💾 Bytes loaded: %.2f MB\n", float64(pageData.BytesRead)/(1024*1024)))
+	builder.WriteString(strings.Repeat("─", 80))
+	builder.WriteString("\n\n")
 
-	// Schema information (show only first few fields to save space)
-	if fields, ok := summary["schema_fields"].([]map[string]string); ok {
-		content += "🗃️ Schema (showing first 8 fields):\n"
-		maxFields := min(8, len(fields))
-		for i := 0; i < maxFields; i++ {
-			field := fields[i]
-			content += fmt.Sprintf("  • %s: %s\n", field["name"], field["type"])
-		}
-		if len(fields) > 8 {
-			content += fmt.Sprintf("  ... and %d more fields\n", len(fields)-8)
-		}
-		content += "\n"
+	fieldOrder := fieldOrderFromSummary(summary)
+	if len(pageData.FieldNames) > 0 {
+		fieldOrder = copyStringSlice(pageData.FieldNames)
+	}
+	if len(fieldOrder) == 0 && len(pageData.Records) > 0 {
+		fieldOrder = deriveFieldOrder(pageData.Records[0])
 	}
 
-	// Page data with 10MB chunk info
-	content += fmt.Sprintf("📄 Chunk %d/%d (~10MB per chunk):\n", pageData.PageNumber, pageData.TotalPages)
-	content += fmt.Sprintf("📊 Records in this chunk: %d\n", len(pageData.Records))
-	content += fmt.Sprintf("💾 Bytes loaded: %.2f MB\n", float64(pageData.BytesRead)/(1024*1024))
-	content += strings.Repeat("─", 80) + "\n\n"
-
-	// Display records (limit to first 3000 for pagination)
-	maxRecords := min(3000, len(pageData.Records))
+	maxRecords := len(pageData.Records)
+	if maxRecords > 3000 {
+		maxRecords = 3000
+	}
 	for i := 0; i < maxRecords; i++ {
 		record := pageData.Records[i]
-		content += fmt.Sprintf("🔢 Record #%d:\n", i+1)
-
-		// Show important fields first
-		importantFields := []string{"exchange", "symbol", "ts_micros", "price", "amount", "bid", "ask", "last"}
-		for _, fieldName := range importantFields {
-			if value, exists := record[fieldName]; exists {
-				if value == nil {
-					content += fmt.Sprintf("  %s: <null>\n", fieldName)
-				} else {
-					content += fmt.Sprintf("  %s: %v\n", fieldName, value)
-				}
-			}
-		}
-
-		// Show other fields (limit to save space)
-		otherFieldCount := 0
-		for key, value := range record {
-			// Skip already shown fields
-			isImportant := false
-			for _, imp := range importantFields {
-				if key == imp {
-					isImportant = true
-					break
-				}
-			}
-			if isImportant {
+		builder.WriteString(fmt.Sprintf("🔢 Record #%d:\n", i+1))
+		for _, fieldName := range fieldOrder {
+			value, exists := record[fieldName]
+			if !exists {
 				continue
 			}
-
-			if otherFieldCount < 3 { // Show max 3 additional fields
-				if value == nil {
-					content += fmt.Sprintf("  %s: <null>\n", key)
-				} else {
-					content += fmt.Sprintf("  %s: %v\n", key, value)
-				}
-				otherFieldCount++
+			if value == nil {
+				builder.WriteString(fmt.Sprintf("  %s: <null>\n", fieldName))
+			} else {
+				builder.WriteString(fmt.Sprintf("  %s: %v\n", fieldName, value))
 			}
 		}
-		content += "\n"
+		builder.WriteString("\n")
 	}
 
-	if len(pageData.Records) > 3000 {
-		content += fmt.Sprintf("... and %d more records in this chunk\n", len(pageData.Records)-3000)
-		content += "💡 Use Previous/Next buttons to navigate through data\n"
+	if len(pageData.Records) > maxRecords {
+		builder.WriteString(fmt.Sprintf("... and %d more records in this chunk\n", len(pageData.Records)-maxRecords))
+		builder.WriteString("💡 Use Previous/Next buttons to navigate through data\n")
 	}
 
-	fileViewer.SetText(content)
+	fileViewer.SetText(builder.String())
 }
 
 // DisplayFileSelectionInfo displays file information when selected (not double-clicked)
@@ -149,4 +126,39 @@ func DisplayFileSelectionInfo(fileViewer *widget.Entry, filePath string, info in
 	}
 
 	fileViewer.SetText(content)
+}
+
+func fieldOrderFromSummary(summary map[string]interface{}) []string {
+	if summary == nil {
+		return nil
+	}
+	fields, ok := summary["schema_fields"].([]map[string]string)
+	if !ok {
+		return nil
+	}
+	order := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if name, ok := field["name"]; ok {
+			order = append(order, name)
+		}
+	}
+	return order
+}
+
+func deriveFieldOrder(record map[string]interface{}) []string {
+	keys := make([]string, 0, len(record))
+	for key := range record {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func copyStringSlice(src []string) []string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]string, len(src))
+	copy(dst, src)
+	return dst
 }

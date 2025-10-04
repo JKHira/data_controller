@@ -10,8 +10,8 @@ import (
 // AppState holds the shared application state
 type AppState struct {
 	// Data bindings
-	StatusBinding binding.String
-	StatsBinding  binding.String
+	StatusBinding       binding.String
+	StatsBinding        binding.String
 	ConfigStatusBinding binding.String
 
 	// File browser state
@@ -20,10 +20,12 @@ type AppState struct {
 	SelectedFileIndex int
 
 	// File viewer state
-	CurrentFilePath string
-	CurrentPage     int
-	TotalPages      int
-	PageSize        int
+	CurrentFilePath    string
+	CurrentPage        int
+	TotalPages         int
+	PageSize           int
+	CurrentFileSummary map[string]interface{}
+	CurrentFieldOrder  []string
 
 	// Connection state
 	IsConnected bool
@@ -32,15 +34,17 @@ type AppState struct {
 // NewAppState creates a new application state
 func NewAppState() *AppState {
 	return &AppState{
-		StatusBinding:     binding.NewString(),
-		StatsBinding:      binding.NewString(),
+		StatusBinding:       binding.NewString(),
+		StatsBinding:        binding.NewString(),
 		ConfigStatusBinding: binding.NewString(),
-		FilesData:         make([]domain.FileItem, 0),
-		FilteredFiles:     make([]domain.FileItem, 0),
-		SelectedFileIndex: -1,
-		CurrentPage:       1,
-		PageSize:          3000,
-		IsConnected:       false,
+		FilesData:           make([]domain.FileItem, 0),
+		FilteredFiles:       make([]domain.FileItem, 0),
+		SelectedFileIndex:   -1,
+		CurrentPage:         1,
+		PageSize:            3000,
+		CurrentFileSummary:  make(map[string]interface{}),
+		CurrentFieldOrder:   make([]string, 0),
+		IsConnected:         false,
 	}
 }
 

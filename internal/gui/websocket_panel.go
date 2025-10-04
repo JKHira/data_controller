@@ -146,6 +146,7 @@ func (p *WebSocketPanel) buildUI() {
 			flags.Checksum = checked
 		})
 	})
+	p.checksumCheck.Disable()
 
 	p.bulkCheck = widget.NewCheck("Bulk Book Updates (536870912)", func(checked bool) {
 		if p.restoring {
@@ -155,6 +156,7 @@ func (p *WebSocketPanel) buildUI() {
 			flags.Bulk = checked
 		})
 	})
+	p.bulkCheck.Disable()
 
 	flagsHeader := widget.NewLabelWithStyle("Connection Flags", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	flagsDescription := widget.NewLabel("Apply Bitfinex configuration flags immediately after connecting.")
@@ -371,6 +373,25 @@ func (p *WebSocketPanel) handleChannelStateChange() {
 
 	p.subscriptionCount.Set(totalSubs)
 	p.updateSubscriptionInfo()
+	p.updateFlagAvailability()
+}
+
+// updateFlagAvailability updates checksum/bulk flag availability based on Books channel state
+func (p *WebSocketPanel) updateFlagAvailability() {
+	booksEnabled := p.booksPanel.IsEnabled()
+
+	if booksEnabled {
+		p.checksumCheck.Enable()
+		p.bulkCheck.Enable()
+	} else {
+		p.checksumCheck.Disable()
+		p.bulkCheck.Disable()
+		// Also uncheck when disabled
+		if !p.restoring {
+			p.checksumCheck.SetChecked(false)
+			p.bulkCheck.SetChecked(false)
+		}
+	}
 }
 
 // canAddSubscriptions validates whether additional subscriptions can be added without exceeding the limit

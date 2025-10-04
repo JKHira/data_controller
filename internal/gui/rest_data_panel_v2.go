@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1248,4 +1249,26 @@ func (p *RestDataPanelV2) fetchTickersToCSV(ctx context.Context, symbols []strin
 	}
 
 	return writer.Error()
+}
+
+// formatFloat formats a float64 value for CSV output
+func formatFloat(val float64) string {
+	return strconv.FormatFloat(val, 'f', -1, 64)
+}
+
+// parseFloat converts various numeric types to float64
+func parseFloat(v interface{}) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case int64:
+		return float64(t)
+	case int:
+		return float64(t)
+	case string:
+		if f, err := strconv.ParseFloat(t, 64); err == nil {
+			return f
+		}
+	}
+	return 0
 }

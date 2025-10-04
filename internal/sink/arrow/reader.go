@@ -2,6 +2,7 @@ package arrow
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +34,7 @@ type PageData struct {
 	HasPrev    bool
 	BytesRead  int64
 	TotalBytes int64
+	FieldNames []string
 }
 
 type SourceType string
@@ -227,6 +229,14 @@ func (r *FileReader) readWithByteLimitPagination(reader ArrowReader, totalFileSi
 	schema := reader.Schema()
 	var allRecords []map[string]interface{}
 	var bytesRead int64
+	fieldNames := make([]string, 0)
+
+	if schema != nil {
+		fieldNames = make([]string, schema.NumFields())
+		for i := 0; i < schema.NumFields(); i++ {
+			fieldNames[i] = schema.Field(i).Name
+		}
+	}
 
 	// For File reader, use indexed access
 	if fileReader, ok := reader.(*ArrowFileReaderWrapper); ok {
@@ -296,6 +306,7 @@ func (r *FileReader) readWithByteLimitPagination(reader ArrowReader, totalFileSi
 		HasPrev:    pageNumber > 1,
 		BytesRead:  bytesRead,
 		TotalBytes: totalFileSize,
+		FieldNames: fieldNames,
 	}, nil
 }
 
@@ -352,10 +363,37 @@ func (r *FileReader) ReadArrowFileSummary(filePath string) (map[string]interface
 	defer reader.Close()
 
 	schema := reader.Schema()
+	metadataMap := schema.Metadata().ToMap()
+	if val, ok := metadataMap["datetime_start_collecting"]; ok {
+		if _, exists := metadataMap["datetime_start"]; !exists {
+			metadataMap["datetime_start"] = val
+		}
+		delete(metadataMap, "datetime_start_collecting")
+	}
+
+	recvTSIdx := -1
+	mtsIdx := -1
+	if idx := schema.FieldIndices("recv_ts"); len(idx) > 0 {
+		recvTSIdx = idx[0]
+	}
+	if idx := schema.FieldIndices("mts"); len(idx) > 0 {
+		mtsIdx = idx[0]
+	}
+
+	minRecv := int64(math.MaxInt64)
+	maxRecv := int64(math.MinInt64)
+	minMTS := int64(math.MaxInt64)
+	maxMTS := int64(math.MinInt64)
+	hasRecv := false
+	hasMTS := false
+
 	totalRecords := int64(0)
 	numBatches := 0
 
-	// Count records differently based on reader type
+	updateRange := func(rec arrow.Record) {
+		extractTimeRange(rec, recvTSIdx, mtsIdx, &minRecv, &maxRecv, &minMTS, &maxMTS, &hasRecv, &hasMTS)
+	}
+
 	if fileReader, ok := reader.(*ArrowFileReaderWrapper); ok {
 		numBatches = fileReader.NumRecords()
 		for i := 0; i < numBatches; i++ {
@@ -363,23 +401,25 @@ func (r *FileReader) ReadArrowFileSummary(filePath string) (map[string]interface
 			if err != nil {
 				continue
 			}
-			totalRecords += record.NumRows()
+			rows := record.NumRows()
+			totalRecords += rows
+			updateRange(record)
 			record.Release()
 		}
 	} else {
-		// For stream reader, we need to iterate through all records
 		for {
 			record, err := reader.NextRecord()
 			if err != nil {
 				break
 			}
-			totalRecords += record.NumRows()
+			rows := record.NumRows()
+			totalRecords += rows
 			numBatches++
+			updateRange(record)
 			record.Release()
 		}
 	}
 
-	// Get file info
 	stat, _ := file.Stat()
 
 	summary := map[string]interface{}{
@@ -388,9 +428,9 @@ func (r *FileReader) ReadArrowFileSummary(filePath string) (map[string]interface
 		"num_batches":   numBatches,
 		"num_columns":   schema.NumFields(),
 		"schema_fields": make([]map[string]string, 0),
+		"metadata":      metadataMap,
 	}
 
-	// Add schema information
 	fields := make([]map[string]string, 0)
 	for i := 0; i < schema.NumFields(); i++ {
 		field := schema.Field(i)
@@ -401,12 +441,70 @@ func (r *FileReader) ReadArrowFileSummary(filePath string) (map[string]interface
 	}
 	summary["schema_fields"] = fields
 
+	if hasRecv && minRecv <= maxRecv {
+		start := time.UnixMicro(minRecv).UTC().Format(time.RFC3339)
+		end := time.UnixMicro(maxRecv).UTC().Format(time.RFC3339)
+		if metadataMap["datetime_start"] == "" {
+			metadataMap["datetime_start"] = start
+		}
+		metadataMap["datetime_end"] = end
+	} else if hasMTS && minMTS <= maxMTS {
+		start := time.UnixMilli(minMTS).UTC().Format(time.RFC3339)
+		end := time.UnixMilli(maxMTS).UTC().Format(time.RFC3339)
+		if metadataMap["datetime_start"] == "" {
+			metadataMap["datetime_start"] = start
+		}
+		metadataMap["datetime_end"] = end
+	}
+
 	r.logger.Info("File summary completed",
 		zap.String("file", filePath),
 		zap.Int64("totalRecords", totalRecords),
 		zap.Int("numBatches", numBatches))
 
 	return summary, nil
+}
+
+func extractTimeRange(rec arrow.Record, recvTSIdx, mtsIdx int, minRecv, maxRecv, minMTS, maxMTS *int64, hasRecv, hasMTS *bool) {
+	if recvTSIdx >= 0 {
+		if col, ok := rec.Column(recvTSIdx).(*array.Int64); ok {
+			for i := 0; i < col.Len(); i++ {
+				if col.IsNull(i) {
+					continue
+				}
+				val := col.Value(i)
+				if val < *minRecv {
+					*minRecv = val
+				}
+				if val > *maxRecv {
+					*maxRecv = val
+				}
+			}
+			if col.Len() > 0 {
+				*hasRecv = true
+			}
+		}
+	}
+
+	if mtsIdx >= 0 {
+		if col, ok := rec.Column(mtsIdx).(*array.Int64); ok {
+			for i := 0; i < col.Len(); i++ {
+				if col.IsNull(i) {
+					continue
+				}
+				val := col.Value(i)
+				if val < *minMTS {
+					*minMTS = val
+				}
+				if val > *maxMTS {
+					*maxMTS = val
+				}
+			}
+			if col.Len() > 0 {
+				*hasMTS = true
+			}
+		}
+	}
 }
 
 func (r *FileReader) getValueAtIndex(column arrow.Array, index int64) interface{} {
@@ -488,20 +586,24 @@ func (r *FileReader) parseFilePath(path string, info os.FileInfo) FileInfo {
 
 			// Determine source type and parse accordingly
 			if i+2 < len(parts) {
-				if parts[i+2] == "websocket" || parts[i+2] == "v2" {
+				source := parts[i+2]
+				switch source {
+				case "websocket", "ws":
 					// WebSocket data: data/{exchange}/websocket/{channel}/{symbol}/...
 					fileInfo.SourceType = SourceWS
 					if i+4 < len(parts) {
 						fileInfo.Channel = parts[i+3]
 						fileInfo.Symbol = parts[i+4]
 					}
-				} else if strings.Contains(parts[i+2], "rest") {
-					// REST API data: data/{exchange}/restapi/{category}/...
-					fileInfo.SourceType = SourceREST
-					if i+3 < len(parts) {
-						fileInfo.Category = parts[i+3]
-						if fileInfo.Category == "basedata" {
-							fileInfo.Channel = "basedata"
+				default:
+					if strings.Contains(source, "rest") {
+						// REST API data: data/{exchange}/restapi/{category}/...
+						fileInfo.SourceType = SourceREST
+						if i+3 < len(parts) {
+							fileInfo.Category = parts[i+3]
+							if fileInfo.Category == "basedata" {
+								fileInfo.Channel = "basedata"
+							}
 						}
 					}
 				}

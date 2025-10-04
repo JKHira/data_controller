@@ -58,6 +58,7 @@ type Application struct {
 	liveStreamData       *gui.LiveStreamData
 	isRunning            bool
 	activeExchange       string
+	customSubscriptions  []gui.ChannelSubscription
 	configRefreshManager *services.ConfigRefreshManager
 	configRefreshCancel  context.CancelFunc
 	configStatusTimer    *time.Timer
@@ -289,9 +290,53 @@ func (a *Application) handleWsConnect(exchange string, symbols []string) error {
 		return err
 	}
 
+	// Start Arrow handler before connection
+	if err := a.arrowHandler.Start(); err != nil {
+		a.logger.Error("Failed to start Arrow handler", zap.Error(err))
+		a.state.StatusBinding.Set("❌ Arrow handler failed")
+		return err
+	}
+
+	// Convert all channel subscriptions to SubscribeRequests
+	// Each channel panel (Ticker, Trades, Books, RawBooks, Candles) provides
+	// its own symbol-specific subscriptions via GetSubscriptions()
+	var customSubs []ws.SubscribeRequest
+	for _, sub := range a.customSubscriptions {
+		req := ws.SubscribeRequest{
+			Event:   "subscribe",
+			Channel: sub.Channel,
+			Symbol:  sub.Symbol,
+		}
+
+		// Handle channel-specific parameters
+		if sub.Channel == "candles" && sub.Key != "" {
+			req.Key = sub.Key
+		}
+		if sub.Channel == "book" {
+			// Books channel parameters
+			if sub.Prec != "" {
+				req.Prec = &sub.Prec
+			}
+			if sub.Freq != "" {
+				req.Freq = &sub.Freq
+			}
+			if sub.Len != "" {
+				req.Len = &sub.Len
+			}
+			// Generate unique SubID for book subscriptions
+			subID := int64(time.Now().UnixNano())
+			req.SubID = &subID
+		}
+
+		customSubs = append(customSubs, req)
+	}
+	a.connectionManager.SetCustomSubscriptions(customSubs)
+
 	if err := a.connectionManager.StartWithSymbols(symbols); err != nil {
 		a.logger.Error("Failed to establish WebSocket connection", zap.Error(err))
 		a.state.StatusBinding.Set("❌ Connection failed")
+		// Stop Arrow handler if connection fails
+		a.arrowHandler.Stop()
 		return err
 	}
 
@@ -328,22 +373,25 @@ func (a *Application) handleWsConnectConfig(wsConfig *gui.WSConnectionConfig) er
 		exchange = "bitfinex"
 	}
 
-	symbols := uniqueStrings(append([]string{}, wsConfig.Symbols...))
-	if len(symbols) == 0 {
-		for _, sub := range wsConfig.Channels {
-			if sub.Symbol != "" {
-				symbols = append(symbols, sub.Symbol)
-			}
+	// Validate that we have channel subscriptions
+	if len(wsConfig.Channels) == 0 {
+		return fmt.Errorf("no channels selected for connection")
+	}
+
+	// Extract symbols for logging/display purposes only
+	// The actual subscriptions are handled via wsConfig.Channels (customSubscriptions)
+	symbols := make([]string, 0)
+	for _, sub := range wsConfig.Channels {
+		if sub.Symbol != "" {
+			symbols = append(symbols, sub.Symbol)
 		}
-		symbols = uniqueStrings(symbols)
 	}
-
-	if len(symbols) == 0 {
-		return fmt.Errorf("no symbols selected for connection")
-	}
-
+	symbols = uniqueStrings(symbols)
 	a.cfg.Symbols = symbols
 	a.cfg.WebSocket.ConfFlags = wsConfig.ConfFlags
+	if a.arrowHandler != nil {
+		a.arrowHandler.UpdateConfFlags(wsConfig.ConfFlags)
+	}
 
 	var (
 		tickerEnabled bool
@@ -371,11 +419,26 @@ func (a *Application) handleWsConnectConfig(wsConfig *gui.WSConnectionConfig) er
 			if bookLen == "" && sub.Len != "" {
 				bookLen = sub.Len
 			}
+		case "candles":
+			// Candles channel - subscription will be handled via SubscribeRequests
+			a.logger.Info("Candles channel enabled via GUI",
+				zap.String("symbol", sub.Symbol),
+				zap.String("key", sub.Key))
 		}
 	}
 
 	if !tickerEnabled && !tradesEnabled && !booksEnabled {
-		tickerEnabled = true
+		// Don't enable ticker by default if any channel is selected
+		hasAnyChannel := false
+		for _, sub := range wsConfig.Channels {
+			if sub.Channel != "" {
+				hasAnyChannel = true
+				break
+			}
+		}
+		if !hasAnyChannel {
+			tickerEnabled = true
+		}
 	}
 
 	a.cfg.Channels.Ticker.Enabled = tickerEnabled
@@ -393,6 +456,9 @@ func (a *Application) handleWsConnectConfig(wsConfig *gui.WSConnectionConfig) er
 			a.cfg.Channels.Books.Length = length
 		}
 	}
+
+	// Store custom subscriptions (like candles) for connection manager
+	a.customSubscriptions = wsConfig.Channels
 
 	return a.handleWsConnect(exchange, symbols)
 }
@@ -415,6 +481,12 @@ func (a *Application) handleWsDisconnect(exchange string) error {
 	}
 
 	a.connectionManager.Stop()
+
+	// Stop Arrow handler to close all files properly
+	if err := a.arrowHandler.Stop(); err != nil {
+		a.logger.Error("Failed to stop Arrow handler", zap.Error(err))
+	}
+
 	a.isRunning = false
 	a.activeExchange = ""
 	a.state.SetConnected(false)
@@ -450,9 +522,24 @@ func (a *Application) handleFilterFiles() {
 func (a *Application) handleWindowClose() {
 	a.logger.Info("GUI: Window close requested")
 
+	// Save current application state before closing
+	if a.configManager != nil {
+		if err := a.configManager.SaveState(); err != nil {
+			a.logger.Warn("Failed to save state on window close", zap.Error(err))
+		} else {
+			a.logger.Info("Application state saved successfully on close")
+		}
+	}
+
 	// Stop connection if active
 	if a.isRunning {
 		a.connectionManager.Stop()
+
+		// Stop Arrow handler to close all files properly
+		if err := a.arrowHandler.Stop(); err != nil {
+			a.logger.Error("Failed to stop Arrow handler on window close", zap.Error(err))
+		}
+
 		a.isRunning = false
 	}
 

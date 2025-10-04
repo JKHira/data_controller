@@ -20,6 +20,9 @@ type Handler struct {
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 	stats       *Statistics
+	mu          sync.Mutex
+	stopped     bool
+	stopOnce    sync.Once
 
 	// GUI data streaming
 	callbacks   []DataCallback
@@ -32,6 +35,7 @@ type Statistics struct {
 	TradesReceived       int64
 	BookLevelsReceived   int64
 	RawBookEventsReceived int64
+	CandlesReceived      int64
 	ControlsReceived     int64
 	TotalBytesWritten    int64
 	LastFlushTime        time.Time
@@ -47,6 +51,10 @@ func NewHandler(cfg *config.Config, logger *zap.Logger) *Handler {
 		stopCh:    make(chan struct{}),
 		callbacks: make([]DataCallback, 0),
 	}
+}
+
+func (h *Handler) UpdateConfFlags(flags int64) {
+	h.writer.UpdateConfFlags(flags)
 }
 
 func (h *Handler) RegisterDataCallback(callback DataCallback) {
@@ -66,6 +74,15 @@ func (h *Handler) broadcastData(dataType, symbol string, data interface{}) {
 }
 
 func (h *Handler) Start() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !h.stopped && h.flushTicker != nil {
+		h.logger.Warn("Arrow handler already started")
+		return nil
+	}
+
+	h.stopped = false
 	h.logger.Info("Starting Arrow handler")
 
 	// Make the flush ticker safe
@@ -83,23 +100,44 @@ func (h *Handler) Start() error {
 }
 
 func (h *Handler) Stop() error {
-	h.logger.Info("Stopping Arrow handler")
+	var err error
+	h.stopOnce.Do(func() {
+		h.logger.Info("Stopping Arrow handler")
 
-	close(h.stopCh)
+		// Stop accepting new data
+		h.mu.Lock()
+		h.stopped = true
+		close(h.stopCh)
+		h.mu.Unlock()
 
-	if h.flushTicker != nil {
-		h.flushTicker.Stop()
+		if h.flushTicker != nil {
+			h.flushTicker.Stop()
+		}
+
+		// Wait for flush routine to finish
+		h.wg.Wait()
+
+		// Final flush before closing to ensure all buffered data is written
+		h.logger.Info("Performing final flush before close")
+		if flushErr := h.writer.FlushAll(); flushErr != nil {
+			h.logger.Error("Failed to flush all data before close", zap.Error(flushErr))
+			// Continue to close even if flush fails
+		}
+
+		// Close all writers and rename .tmp files to final files
+		if closeErr := h.writer.Close(); closeErr != nil {
+			h.logger.Error("Failed to close writer", zap.Error(closeErr))
+			err = closeErr
+		}
+
+		h.logger.Info("Arrow handler stopped")
+	})
+
+	if !h.stopped {
+		h.logger.Warn("Arrow handler already stopped")
 	}
 
-	h.wg.Wait()
-
-	if err := h.writer.Close(); err != nil {
-		h.logger.Error("Failed to close writer", zap.Error(err))
-		return err
-	}
-
-	h.logger.Info("Arrow handler stopped")
-	return nil
+	return err
 }
 
 func (h *Handler) HandleTicker(ticker *schema.Ticker) {
@@ -114,6 +152,7 @@ func (h *Handler) HandleTicker(ticker *schema.Ticker) {
 
 	// Broadcast to GUI first (non-blocking)
 	h.broadcastData("ticker", ticker.Symbol, ticker)
+	h.ensureMetadata(ticker.CommonFields)
 
 	if err := h.writer.WriteTicker(ticker); err != nil {
 		h.logger.Error("Failed to write ticker",
@@ -130,13 +169,44 @@ func (h *Handler) HandleTrade(trade *schema.Trade) {
 	h.stats.TradesReceived++
 	h.stats.mu.Unlock()
 
+	h.logger.Debug("Received trade data",
+		zap.String("symbol", trade.Symbol),
+		zap.Int64("trade_id", trade.TradeID),
+		zap.Float64("price", trade.Price),
+		zap.Float64("amount", trade.Amount))
+
 	// Broadcast to GUI first (non-blocking)
 	h.broadcastData("trade", trade.Symbol, trade)
+	h.ensureMetadata(trade.CommonFields)
 
 	if err := h.writer.WriteTrade(trade); err != nil {
 		h.logger.Error("Failed to write trade",
 			zap.String("symbol", trade.Symbol),
 			zap.Int64("trade_id", trade.TradeID),
+			zap.Error(err))
+		h.incrementError()
+	}
+}
+
+func (h *Handler) HandleCandle(candle *schema.Candle) {
+	h.stats.mu.Lock()
+	h.stats.CandlesReceived++
+	h.stats.mu.Unlock()
+
+	h.logger.Debug("Received candle data",
+		zap.String("symbol", candle.Symbol),
+		zap.String("timeframe", candle.Timeframe),
+		zap.Float64("open", candle.Open),
+		zap.Float64("close", candle.Close))
+
+	// Broadcast to GUI first (non-blocking)
+	h.broadcastData("candle", candle.Symbol, candle)
+	h.ensureMetadata(candle.CommonFields)
+
+	if err := h.writer.WriteCandle(candle); err != nil {
+		h.logger.Error("Failed to write candle",
+			zap.String("symbol", candle.Symbol),
+			zap.String("timeframe", candle.Timeframe),
 			zap.Error(err))
 		h.incrementError()
 	}
@@ -149,6 +219,7 @@ func (h *Handler) HandleBookLevel(level *schema.BookLevel) {
 
 	// Broadcast to GUI first (non-blocking)
 	h.broadcastData("book", level.Symbol, level)
+	h.ensureMetadata(level.CommonFields)
 
 	if err := h.writer.WriteBookLevel(level); err != nil {
 		h.logger.Error("Failed to write book level",
@@ -166,6 +237,7 @@ func (h *Handler) HandleRawBookEvent(event *schema.RawBookEvent) {
 
 	// Broadcast to GUI first (non-blocking)
 	h.broadcastData("raw_book", event.Symbol, event)
+	h.ensureMetadata(event.CommonFields)
 
 	if err := h.writer.WriteRawBookEvent(event); err != nil {
 		h.logger.Error("Failed to write raw book event",
@@ -184,6 +256,24 @@ func (h *Handler) HandleControl(control *schema.Control) {
 	h.logger.Debug("Received control message",
 		zap.String("type", control.Type),
 		zap.String("reason", control.Reason))
+}
+
+func (h *Handler) ensureMetadata(common schema.CommonFields) {
+	if common.Channel == "" {
+		return
+	}
+	meta := schema.ChannelMetadata{
+		Channel: common.Channel,
+		Symbol:  common.Symbol,
+		Pair:    common.PairOrCurrency,
+		Key:     common.ChannelKey,
+		ChanID:  common.ChanID,
+		Timeframe: common.Timeframe,
+		BookPrec:  common.BookPrec,
+		BookFreq:  common.BookFreq,
+		BookLen:   common.BookLen,
+	}
+	h.writer.UpdateChannelMetadata(meta)
 }
 
 func (h *Handler) flushRoutine() {
@@ -238,6 +328,7 @@ func (h *Handler) GetStatistics() *Statistics {
 		TradesReceived:        h.stats.TradesReceived,
 		BookLevelsReceived:    h.stats.BookLevelsReceived,
 		RawBookEventsReceived: h.stats.RawBookEventsReceived,
+		CandlesReceived:       h.stats.CandlesReceived,
 		ControlsReceived:      h.stats.ControlsReceived,
 		TotalBytesWritten:     h.stats.TotalBytesWritten,
 		LastFlushTime:         h.stats.LastFlushTime,

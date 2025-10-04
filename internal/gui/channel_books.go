@@ -296,6 +296,11 @@ func (p *BooksChannelPanel) GetSubscriptionCount() int {
 	return len(p.selectedSymbols)
 }
 
+// IsEnabled returns whether the books channel is enabled
+func (p *BooksChannelPanel) IsEnabled() bool {
+	return p.enabled
+}
+
 func (p *BooksChannelPanel) LoadState(uiState *config.UIState) {
 	if uiState == nil || uiState.ChannelStates == nil {
 		return

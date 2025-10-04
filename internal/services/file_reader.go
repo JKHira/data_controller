@@ -22,6 +22,7 @@ type PageData struct {
 	HasPrev    bool
 	BytesRead  int64
 	TotalBytes int64
+	FieldNames []string
 }
 
 func NewFileReaderService(logger *zap.Logger) *FileReaderService {
@@ -52,6 +53,7 @@ func (frs *FileReaderService) ReadFileWithPagination(filePath string, pageNumber
 		HasPrev:    arrowPageData.HasPrev,
 		BytesRead:  arrowPageData.BytesRead,
 		TotalBytes: arrowPageData.TotalBytes,
+		FieldNames: arrowPageData.FieldNames,
 	}, nil
 }
 

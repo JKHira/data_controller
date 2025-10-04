@@ -16,6 +16,7 @@ type ViewerPanel struct {
 
 	// UI components
 	fileViewer     *widget.Entry
+	metadataViewer *widget.Entry
 	prevBtn        *widget.Button
 	nextBtn        *widget.Button
 	closeBtn       *widget.Button
@@ -45,6 +46,14 @@ func (vp *ViewerPanel) createUI() {
 		readOnlyEntry.SetReadOnly(true)
 	}
 
+	// Metadata viewer (fixed square area)
+	vp.metadataViewer = widget.NewMultiLineEntry()
+	vp.metadataViewer.SetPlaceHolder("Metadata will appear after loading an Arrow file...")
+	vp.metadataViewer.Wrapping = fyne.TextWrapWord
+	if readOnlyEntry, ok := interface{}(vp.metadataViewer).(interface{ SetReadOnly(bool) }); ok {
+		readOnlyEntry.SetReadOnly(true)
+	}
+
 	// Create pagination controls
 	vp.prevBtn = widget.NewButton("◀ Previous", vp.handlePreviousPage)
 	vp.nextBtn = widget.NewButton("Next ▶", vp.handleNextPage)
@@ -60,6 +69,7 @@ func (vp *ViewerPanel) createUI() {
 func (vp *ViewerPanel) setupController() {
 	vp.fileController.SetUIComponents(
 		vp.fileViewer,
+		vp.metadataViewer,
 		vp.pageLabel,
 		vp.prevBtn,
 		vp.nextBtn,
@@ -78,13 +88,17 @@ func (vp *ViewerPanel) GetContent() fyne.CanvasObject {
 		widget.NewSeparator(),
 		vp.closeBtn,
 	)
+	metadataScroll := container.NewVScroll(vp.metadataViewer)
+	metadataScroll.SetMinSize(fyne.NewSize(220, 220))
+	metadataCard := widget.NewCard("📑 Metadata", "", metadataScroll)
 	viewerScroll := container.NewVScroll(vp.fileViewer)
+	contentBody := container.NewBorder(metadataCard, nil, nil, nil, viewerScroll)
 	viewerContent := container.NewBorder(
-		viewerControls, // top
-		nil,            // bottom
-		nil,            // left
-		nil,            // right
-		viewerScroll,   // center (takes remaining space)
+		viewerControls,
+		nil,
+		nil,
+		nil,
+		contentBody,
 	)
 	return widget.NewCard("👁️ File Viewer", "", viewerContent)
 }

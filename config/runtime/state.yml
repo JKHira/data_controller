@@ -10,25 +10,27 @@ exchanges:
                       symbol: tBTCUSD
                       chanId: 12345
             ui_state:
-                active_tab: ticker
+                active_tab: candles
                 selected_symbols:
                     - tBTCUSD
                     - tETHUSD
                 connection_flags:
                     checksum: true
-                    bulk: false
+                    bulk: true
                     timestamp: true
-                    sequence: false
+                    sequence: true
                 channel_states:
                     books:
-                        enabled: false
+                        enabled: true
                         frequency: F0
                         length: "25"
                         precision: P0
-                        selected_symbols: []
+                        selected_symbols:
+                            - tADABTC
                     candles:
-                        enabled: false
-                        selected_symbols: []
+                        enabled: true
+                        selected_symbols:
+                            - tDSHBTC
                         timeframe: 1m
                     status:
                         enabled: false
@@ -36,22 +38,23 @@ exchanges:
                     ticker:
                         enabled: true
                         selected_symbols:
-                            - tADABTC
+                            - tBTCEUR
                     trades:
-                        enabled: false
-                        selected_symbols: []
+                        enabled: true
+                        selected_symbols:
+                            - tBTCGBP
         rest_config_cache:
             last_updated:
                 pub:list:currency: 2025-10-01T20:04:13.919496+02:00
-                pub:list:pair:exchange: 2025-10-01T20:04:13.924917+02:00
-                pub:list:pair:futures: 2025-10-01T20:04:13.922113+02:00
-                pub:list:pair:margin: 2025-10-01T20:04:13.951276+02:00
+                pub:list:pair:exchange: 2025-10-02T06:34:46.579687+02:00
+                pub:list:pair:futures: 2025-10-02T06:34:46.57472+02:00
+                pub:list:pair:margin: 2025-10-02T06:34:46.610461+02:00
                 pub:map:currency:label: 2025-10-01T20:04:13.922109+02:00
                 pub:map:currency:sym: 2025-10-01T20:04:13.923779+02:00
             next_update:
                 pub:list:currency: 2025-10-02T20:04:13.919496+02:00
-                pub:list:pair:exchange: 2025-10-01T21:04:13.924917+02:00
-                pub:list:pair:futures: 2025-10-01T21:04:13.922113+02:00
-                pub:list:pair:margin: 2025-10-01T21:04:13.951276+02:00
+                pub:list:pair:exchange: 2025-10-02T07:34:46.579687+02:00
+                pub:list:pair:futures: 2025-10-02T07:34:46.57472+02:00
+                pub:list:pair:margin: 2025-10-02T07:34:46.610461+02:00
                 pub:map:currency:label: 2025-10-02T20:04:13.922109+02:00
                 pub:map:currency:sym: 2025-10-02T20:04:13.923779+02:00

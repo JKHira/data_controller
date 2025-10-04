@@ -2,19 +2,22 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/trade-engine/data-controller/pkg/schema"
+	"go.uber.org/zap"
 )
 
 type Router struct {
-	logger        *zap.Logger
-	tickerChan    chan *schema.Ticker
-	tradesChan    chan *schema.Trade
-	booksChan     chan *schema.BookLevel
-	rawBooksChan  chan *schema.RawBookEvent
-	controlsChan  chan *schema.Control
+	logger       *zap.Logger
+	tickerChan   chan *schema.Ticker
+	tradesChan   chan *schema.Trade
+	booksChan    chan *schema.BookLevel
+	rawBooksChan chan *schema.RawBookEvent
+	candlesChan  chan *schema.Candle
+	controlsChan chan *schema.Control
 }
 
 type MessageHandler interface {
@@ -22,6 +25,7 @@ type MessageHandler interface {
 	HandleTrade(trade *schema.Trade)
 	HandleBookLevel(level *schema.BookLevel)
 	HandleRawBookEvent(event *schema.RawBookEvent)
+	HandleCandle(candle *schema.Candle)
 	HandleControl(control *schema.Control)
 }
 
@@ -32,6 +36,7 @@ func NewRouter(logger *zap.Logger) *Router {
 		tradesChan:   make(chan *schema.Trade, 10000),
 		booksChan:    make(chan *schema.BookLevel, 10000),
 		rawBooksChan: make(chan *schema.RawBookEvent, 10000),
+		candlesChan:  make(chan *schema.Candle, 10000),
 		controlsChan: make(chan *schema.Control, 1000),
 	}
 }
@@ -62,6 +67,12 @@ func (r *Router) SetHandler(handler MessageHandler) {
 	}()
 
 	go func() {
+		for candle := range r.candlesChan {
+			handler.HandleCandle(candle)
+		}
+	}()
+
+	go func() {
 		for control := range r.controlsChan {
 			handler.HandleControl(control)
 		}
@@ -69,21 +80,25 @@ func (r *Router) SetHandler(handler MessageHandler) {
 }
 
 func (r *Router) RouteMessage(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string) error {
+	return r.RouteMessageWithSeq(chanID, channelInfo, data, connID, nil)
+}
+
+func (r *Router) RouteMessageWithSeq(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, seq *int64) error {
 	recvTS := time.Now().UnixNano()
 
 	switch channelInfo.Channel {
 	case "ticker":
-		return r.routeTicker(chanID, channelInfo, data, connID, recvTS)
+		return r.routeTicker(chanID, channelInfo, data, connID, recvTS, seq)
 	case "trades":
-		return r.routeTrades(chanID, channelInfo, data, connID, recvTS)
+		return r.routeTrades(chanID, channelInfo, data, connID, recvTS, seq)
 	case "book":
-		if channelInfo.SubID != nil {
-			subReq := getSubRequestBySubID(*channelInfo.SubID)
-			if subReq != nil && subReq.Prec != nil && *subReq.Prec == "R0" {
-				return r.routeRawBooks(chanID, channelInfo, data, connID, recvTS)
-			}
+		// Check if this is raw books (R0 precision)
+		if channelInfo.SubReq.Prec != nil && *channelInfo.SubReq.Prec == "R0" {
+			return r.routeRawBooks(chanID, channelInfo, data, connID, recvTS, seq)
 		}
-		return r.routeBooks(chanID, channelInfo, data, connID, recvTS)
+		return r.routeBooks(chanID, channelInfo, data, connID, recvTS, seq)
+	case "candles":
+		return r.routeCandles(chanID, channelInfo, data, connID, recvTS, seq)
 	default:
 		r.logger.Warn("Unknown channel type", zap.String("channel", channelInfo.Channel))
 	}
@@ -91,7 +106,7 @@ func (r *Router) RouteMessage(chanID int32, channelInfo *ChannelInfo, data []jso
 	return nil
 }
 
-func (r *Router) routeTicker(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64) error {
+func (r *Router) routeTicker(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, seq *int64) error {
 	// Bitfinex ticker message format: [CHANNEL_ID, [ticker_array], TIMESTAMP]
 	// So data[0] contains the ticker array with 10 values
 	if len(data) < 1 {
@@ -118,13 +133,12 @@ func (r *Router) routeTicker(chanID int32, channelInfo *ChannelInfo, data []json
 
 	ticker := &schema.Ticker{
 		CommonFields: schema.CommonFields{
-			Exchange:       schema.ExchangeBitfinex,
-			Channel:        schema.ChannelTicker,
 			Symbol:         channelInfo.Symbol,
 			PairOrCurrency: channelInfo.Pair,
-			ConnID:         connID,
-			ChanID:         chanID,
+			Seq:            seq,
 			RecvTS:         recvTS,
+			ChanID:         chanID,
+			Channel:        schema.ChannelTicker,
 		},
 		Bid:            values[0],
 		BidSize:        values[1],
@@ -147,44 +161,58 @@ func (r *Router) routeTicker(chanID int32, channelInfo *ChannelInfo, data []json
 	return nil
 }
 
-func (r *Router) routeTrades(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64) error {
+func (r *Router) routeTrades(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, seq *int64) error {
 	var msgType string
 	var tradeData []json.RawMessage
 	isSnapshot := false
 
-	if len(data) >= 2 {
+	r.logger.Debug("routeTrades called", zap.Int("data_len", len(data)))
+
+	if len(data) >= 1 {
+		// Check if it's a snapshot (array of trade arrays)
 		var testArray []json.RawMessage
 		if err := json.Unmarshal(data[0], &testArray); err == nil {
 			isSnapshot = true
+			r.logger.Debug("Snapshot detected", zap.Int("trades_count", len(testArray)))
 			for _, item := range testArray {
 				var singleTrade [4]json.RawMessage
 				if err := json.Unmarshal(item, &singleTrade); err != nil {
+					r.logger.Warn("Failed to unmarshal trade", zap.Error(err))
 					continue
 				}
-				r.processSingleTrade(chanID, channelInfo, singleTrade[:], connID, recvTS, isSnapshot, "snapshot")
+				r.processSingleTrade(chanID, channelInfo, singleTrade[:], connID, recvTS, isSnapshot, "snapshot", seq)
 			}
 			return nil
 		}
 
-		if err := json.Unmarshal(data[0], &msgType); err == nil {
-			if msgType == "te" || msgType == "tu" {
-				tradeData = data[1:]
+		// Check for message type (te/tu)
+		if len(data) >= 2 {
+			if err := json.Unmarshal(data[0], &msgType); err == nil {
+				if msgType == "te" || msgType == "tu" {
+					tradeData = data[1:]
+				}
+			} else {
+				msgType = "unknown"
+				tradeData = data
 			}
-		} else {
-			msgType = "unknown"
-			tradeData = data
 		}
 	}
 
 	if len(tradeData) >= 4 {
-		return r.processSingleTrade(chanID, channelInfo, tradeData, connID, recvTS, isSnapshot, msgType)
+		return r.processSingleTrade(chanID, channelInfo, tradeData, connID, recvTS, isSnapshot, msgType, seq)
 	}
 
 	return nil
 }
 
-func (r *Router) processSingleTrade(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, isSnapshot bool, msgType string) error {
+func (r *Router) processSingleTrade(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, isSnapshot bool, msgType string, seq *int64) error {
+	r.logger.Debug("Processing single trade",
+		zap.Int("data_len", len(data)),
+		zap.Bool("is_snapshot", isSnapshot),
+		zap.String("msg_type", msgType))
+
 	if len(data) < 4 {
+		r.logger.Warn("Trade data too short", zap.Int("length", len(data)))
 		return nil
 	}
 
@@ -208,14 +236,12 @@ func (r *Router) processSingleTrade(chanID int32, channelInfo *ChannelInfo, data
 
 	trade := &schema.Trade{
 		CommonFields: schema.CommonFields{
-			Exchange:       schema.ExchangeBitfinex,
-			Channel:        schema.ChannelTrades,
 			Symbol:         channelInfo.Symbol,
 			PairOrCurrency: channelInfo.Pair,
-			ConnID:         connID,
-			ChanID:         chanID,
+			Seq:            seq,
 			RecvTS:         recvTS,
-			SrvMTS:         &mts,
+			ChanID:         chanID,
+			Channel:        schema.ChannelTrades,
 		},
 		TradeID:    tradeID,
 		MTS:        mts,
@@ -225,8 +251,13 @@ func (r *Router) processSingleTrade(chanID int32, channelInfo *ChannelInfo, data
 		IsSnapshot: isSnapshot,
 	}
 
+	r.logger.Debug("Sending trade to channel",
+		zap.String("symbol", trade.Symbol),
+		zap.Int64("trade_id", trade.TradeID))
+
 	select {
 	case r.tradesChan <- trade:
+		r.logger.Debug("Trade sent successfully", zap.Int64("trade_id", trade.TradeID))
 	default:
 		r.logger.Warn("Trades channel full, dropping message")
 	}
@@ -234,7 +265,7 @@ func (r *Router) processSingleTrade(chanID int32, channelInfo *ChannelInfo, data
 	return nil
 }
 
-func (r *Router) routeBooks(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64) error {
+func (r *Router) routeBooks(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, seq *int64) error {
 	var isSnapshot bool
 	var bookData []json.RawMessage
 
@@ -247,7 +278,7 @@ func (r *Router) routeBooks(chanID int32, channelInfo *ChannelInfo, data []json.
 				if err := json.Unmarshal(item, &singleLevel); err != nil {
 					continue
 				}
-				r.processSingleBookLevel(chanID, channelInfo, singleLevel[:], connID, recvTS, isSnapshot)
+				r.processSingleBookLevel(chanID, channelInfo, singleLevel[:], connID, recvTS, isSnapshot, seq)
 			}
 			return nil
 		}
@@ -255,13 +286,13 @@ func (r *Router) routeBooks(chanID int32, channelInfo *ChannelInfo, data []json.
 	}
 
 	if len(bookData) >= 3 {
-		return r.processSingleBookLevel(chanID, channelInfo, bookData, connID, recvTS, isSnapshot)
+		return r.processSingleBookLevel(chanID, channelInfo, bookData, connID, recvTS, isSnapshot, seq)
 	}
 
 	return nil
 }
 
-func (r *Router) processSingleBookLevel(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, isSnapshot bool) error {
+func (r *Router) processSingleBookLevel(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, isSnapshot bool, seq *int64) error {
 	if len(data) < 3 {
 		return nil
 	}
@@ -306,14 +337,15 @@ func (r *Router) processSingleBookLevel(chanID int32, channelInfo *ChannelInfo, 
 
 	level := &schema.BookLevel{
 		CommonFields: schema.CommonFields{
-			Exchange:       schema.ExchangeBitfinex,
-			Channel:        schema.ChannelBooks,
 			Symbol:         channelInfo.Symbol,
 			PairOrCurrency: channelInfo.Pair,
-			ConnID:         connID,
-			ChanID:         chanID,
-			SubID:          channelInfo.SubID,
+			Seq:            seq,
 			RecvTS:         recvTS,
+			ChanID:         chanID,
+			Channel:        schema.ChannelBooks,
+			BookPrec:       prec,
+			BookFreq:       freq,
+			BookLen:        fmt.Sprintf("%d", length),
 		},
 		Price:      price,
 		Count:      count,
@@ -334,7 +366,7 @@ func (r *Router) processSingleBookLevel(chanID int32, channelInfo *ChannelInfo, 
 	return nil
 }
 
-func (r *Router) routeRawBooks(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64) error {
+func (r *Router) routeRawBooks(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, seq *int64) error {
 	var isSnapshot bool
 	var bookData []json.RawMessage
 
@@ -347,7 +379,7 @@ func (r *Router) routeRawBooks(chanID int32, channelInfo *ChannelInfo, data []js
 				if err := json.Unmarshal(item, &singleOrder); err != nil {
 					continue
 				}
-				r.processSingleRawBookEvent(chanID, channelInfo, singleOrder[:], connID, recvTS, isSnapshot)
+				r.processSingleRawBookEvent(chanID, channelInfo, singleOrder[:], connID, recvTS, isSnapshot, seq)
 			}
 			return nil
 		}
@@ -355,13 +387,13 @@ func (r *Router) routeRawBooks(chanID int32, channelInfo *ChannelInfo, data []js
 	}
 
 	if len(bookData) >= 3 {
-		return r.processSingleRawBookEvent(chanID, channelInfo, bookData, connID, recvTS, isSnapshot)
+		return r.processSingleRawBookEvent(chanID, channelInfo, bookData, connID, recvTS, isSnapshot, seq)
 	}
 
 	return nil
 }
 
-func (r *Router) processSingleRawBookEvent(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, isSnapshot bool) error {
+func (r *Router) processSingleRawBookEvent(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, isSnapshot bool, seq *int64) error {
 	if len(data) < 3 {
 		return nil
 	}
@@ -392,14 +424,15 @@ func (r *Router) processSingleRawBookEvent(chanID int32, channelInfo *ChannelInf
 
 	event := &schema.RawBookEvent{
 		CommonFields: schema.CommonFields{
-			Exchange:       schema.ExchangeBitfinex,
-			Channel:        schema.ChannelRawBooks,
 			Symbol:         channelInfo.Symbol,
 			PairOrCurrency: channelInfo.Pair,
-			ConnID:         connID,
-			ChanID:         chanID,
-			SubID:          channelInfo.SubID,
+			Seq:            seq,
 			RecvTS:         recvTS,
+			ChanID:         chanID,
+			Channel:        schema.ChannelRawBooks,
+			BookPrec:       derefString(channelInfo.SubReq.Prec),
+			BookFreq:       derefString(channelInfo.SubReq.Freq),
+			BookLen:        derefString(channelInfo.SubReq.Len),
 		},
 		OrderID:    orderID,
 		Price:      price,
@@ -448,10 +481,121 @@ func parseIntFromString(s string) int {
 	}
 }
 
+func (r *Router) routeCandles(chanID int32, channelInfo *ChannelInfo, data []json.RawMessage, connID string, recvTS int64, seq *int64) error {
+	// Bitfinex candles message format: [CHANNEL_ID, [MTS, OPEN, CLOSE, HIGH, LOW, VOLUME]]
+	// data[0] contains the candle array with 6 values
+	if len(data) < 1 {
+		r.logger.Warn("Candles data too short", zap.Int("length", len(data)))
+		return nil
+	}
+
+	// Check if this is a snapshot (array of candles) or single update
+	var testArray []json.RawMessage
+	if err := json.Unmarshal(data[0], &testArray); err == nil && len(testArray) > 0 {
+		// Snapshot: array of candle arrays
+		for _, item := range testArray {
+			if err := r.processSingleCandle(chanID, channelInfo, item, connID, recvTS, true, seq); err != nil {
+				r.logger.Error("Failed to process candle in snapshot", zap.Error(err))
+			}
+		}
+		return nil
+	}
+
+	// Single candle update
+	return r.processSingleCandle(chanID, channelInfo, data[0], connID, recvTS, false, seq)
+}
+
+func (r *Router) processSingleCandle(chanID int32, channelInfo *ChannelInfo, candleData json.RawMessage, connID string, recvTS int64, isSnapshot bool, seq *int64) error {
+	// Parse candle array [MTS, OPEN, CLOSE, HIGH, LOW, VOLUME]
+	var mts int64
+	var open, close, high, low, volume float64
+
+	var candleArray [6]json.RawMessage
+	if err := json.Unmarshal(candleData, &candleArray); err != nil {
+		r.logger.Error("Failed to parse candle array", zap.Error(err))
+		return err
+	}
+
+	if err := json.Unmarshal(candleArray[0], &mts); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(candleArray[1], &open); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(candleArray[2], &close); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(candleArray[3], &high); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(candleArray[4], &low); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(candleArray[5], &volume); err != nil {
+		return err
+	}
+
+	// Extract timeframe from channelInfo.SubReq.Key (format: "trade:1m:tBTCUSD")
+	timeframe := ""
+	if channelInfo.SubReq.Key != "" {
+		parts := strings.Split(channelInfo.SubReq.Key, ":")
+		if len(parts) >= 2 {
+			timeframe = parts[1]
+		}
+	}
+
+	key := deriveChannelKey(schema.ChannelCandles, channelInfo)
+	candle := &schema.Candle{
+		CommonFields: schema.CommonFields{
+			Symbol:         channelInfo.Symbol,
+			PairOrCurrency: channelInfo.Pair,
+			Seq:            seq,
+			RecvTS:         recvTS / 1000,
+			ChanID:         chanID,
+			Channel:        schema.ChannelCandles,
+			ChannelKey:     key,
+			Timeframe:      timeframe,
+		},
+		MTS:        mts,
+		Open:       open,
+		Close:      close,
+		High:       high,
+		Low:        low,
+		Volume:     volume,
+		IsSnapshot: isSnapshot,
+	}
+
+	select {
+	case r.candlesChan <- candle:
+	default:
+		r.logger.Warn("Candles channel full, dropping message")
+	}
+
+	return nil
+}
+
+func deriveChannelKey(channel schema.Channel, info *ChannelInfo) string {
+	if info == nil {
+		return ""
+	}
+	if channel == schema.ChannelCandles {
+		return info.SubReq.Key
+	}
+	return ""
+}
+
+func derefString(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return *ptr
+}
+
 func (r *Router) Close() {
 	close(r.tickerChan)
 	close(r.tradesChan)
 	close(r.booksChan)
 	close(r.rawBooksChan)
+	close(r.candlesChan)
 	close(r.controlsChan)
 }

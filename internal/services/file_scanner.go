@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,7 +48,7 @@ func (fs *FileScanner) GetAllFiles() ([]string, error) {
 			return nil // Continue walking
 		}
 
-		if !info.IsDir() && strings.HasSuffix(path, ".arrow") {
+		if !info.IsDir() && (strings.HasSuffix(path, ".arrow") || strings.HasSuffix(path, ".arrow.tmp")) {
 			files = append(files, path)
 		}
 
@@ -107,8 +108,11 @@ func (fs *FileScanner) GetFilteredFiles(filter FileFilter) ([]string, error) {
 
 // legacySourceMap maps old directory names to new ones
 var legacySourceMap = map[string]string{
-	"v2":        "ws",
-	"websocket": "ws",
+	"v1":        "websocket",
+	"v2":        "websocket",
+	"websocket": "websocket",
+	"ws":        "websocket",
+	"restv1":    "restapi",
 	"restv2":    "restapi",
 }
 
@@ -124,10 +128,10 @@ func normalizeSource(src string) string {
 func sourceCandidates(src string) []string {
 	s := normalizeSource(src)
 	switch s {
-	case "ws":
-		return []string{"ws", "websocket", "v2"}
+	case "websocket":
+		return []string{"websocket"} // Only use "websocket", not "ws"
 	case "restapi":
-		return []string{"restapi", "restv2"}
+		return []string{"restapi"}
 	default:
 		return []string{s}
 	}
@@ -178,11 +182,10 @@ func (fs *FileScanner) FindFiles(ctx context.Context, params domain.ScanParams) 
 
 					if params.Symbol != "" && !strings.EqualFold(params.Symbol, "ALL") {
 						symbolPath := filepath.Join(categoryPath, params.Symbol, fmt.Sprintf("dt=%s", date))
-						if hour != "" {
-							symbolPath = filepath.Join(symbolPath, fmt.Sprintf("hour=%s", hour))
-						}
+						scanParams := params
+						scanParams.Hour = hour
 
-						files, err := fs.scanPath(symbolPath, params)
+						files, err := fs.scanPath(symbolPath, scanParams)
 						if err != nil {
 							fs.logger.Debug("Failed to scan path", zap.String("path", symbolPath), zap.Error(err))
 							continue
@@ -194,7 +197,9 @@ func (fs *FileScanner) FindFiles(ctx context.Context, params domain.ScanParams) 
 							files[i].Category = params.Category
 							files[i].Symbol = params.Symbol
 							files[i].Date = date
-							files[i].Hour = hour
+							if files[i].Hour == "" {
+								files[i].Hour = hour
+							}
 						}
 
 						allFiles = append(allFiles, files...)
@@ -209,11 +214,10 @@ func (fs *FileScanner) FindFiles(ctx context.Context, params domain.ScanParams) 
 
 					for _, symbol := range symbols {
 						symbolPath := filepath.Join(categoryPath, symbol, fmt.Sprintf("dt=%s", date))
-						if hour != "" {
-							symbolPath = filepath.Join(symbolPath, fmt.Sprintf("hour=%s", hour))
-						}
+						scanParams := params
+						scanParams.Hour = hour
 
-						files, err := fs.scanPath(symbolPath, params)
+						files, err := fs.scanPath(symbolPath, scanParams)
 						if err != nil {
 							fs.logger.Debug("Failed to scan path", zap.String("path", symbolPath), zap.Error(err))
 							continue
@@ -225,7 +229,9 @@ func (fs *FileScanner) FindFiles(ctx context.Context, params domain.ScanParams) 
 							files[i].Category = params.Category
 							files[i].Symbol = symbol
 							files[i].Date = date
-							files[i].Hour = hour
+							if files[i].Hour == "" {
+								files[i].Hour = hour
+							}
 						}
 
 						allFiles = append(allFiles, files...)
@@ -255,19 +261,30 @@ func (fs *FileScanner) generateDateRange(from, to time.Time) []string {
 
 // generateHours generates hour strings based on the hour parameter
 func (fs *FileScanner) generateHours(hour string) []string {
-	if hour == "All" || hour == "" {
-		hours := make([]string, 24)
-		for i := 0; i < 24; i++ {
-			hours[i] = fmt.Sprintf("%02d", i)
-		}
-		return hours
+	switch strings.ToLower(strings.TrimSpace(hour)) {
+	case "", "all":
+		return []string{""}
+	default:
+		return []string{hour}
 	}
-	return []string{hour}
 }
 
 // scanPath scans a specific directory path for files
 func (fs *FileScanner) scanPath(basePath string, params domain.ScanParams) ([]domain.FileItem, error) {
 	var files []domain.FileItem
+
+	if basePath == "" {
+		return files, nil
+	}
+
+	if stat, err := os.Stat(basePath); err != nil {
+		if os.IsNotExist(err) {
+			return files, nil
+		}
+		return files, err
+	} else if !stat.IsDir() {
+		basePath = filepath.Dir(basePath)
+	}
 
 	err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -279,8 +296,13 @@ func (fs *FileScanner) scanPath(basePath string, params domain.ScanParams) ([]do
 			return nil
 		}
 
-		// Check file extension
+		// Check file extension (including .tmp files)
 		ext := strings.ToLower(filepath.Ext(path))
+		// Handle .arrow.tmp as .arrow extension
+		if strings.HasSuffix(path, ".arrow.tmp") {
+			ext = ".arrow"
+		}
+
 		if ext == ".arrow" || ext == ".jsonl" {
 			// Apply extension filter
 			if params.Ext != "any" {
@@ -288,6 +310,13 @@ func (fs *FileScanner) scanPath(basePath string, params domain.ScanParams) ([]do
 					return nil
 				}
 				if params.Ext == "jsonl" && ext != ".jsonl" {
+					return nil
+				}
+			}
+
+			fileHour := fs.extractHourFromPath(path)
+			if params.Hour != "" {
+				if fileHour == "" || !strings.EqualFold(fileHour, params.Hour) {
 					return nil
 				}
 			}
@@ -303,6 +332,7 @@ func (fs *FileScanner) scanPath(basePath string, params domain.ScanParams) ([]do
 				Size:    info.Size(),
 				ModTime: info.ModTime(),
 				Symbol:  symbol,
+				Hour:    fileHour,
 				Ext:     strings.TrimPrefix(ext, "."),
 			})
 		}
@@ -315,23 +345,98 @@ func (fs *FileScanner) scanPath(basePath string, params domain.ScanParams) ([]do
 
 // extractSymbolFromPath extracts symbol from file path
 func (fs *FileScanner) extractSymbolFromPath(path, exchange, source, category string) string {
-	// Try to extract symbol from path structure
-	// Expected: .../exchange/source/category/symbol/dt=.../...
-	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	cleanPath := filepath.Clean(path)
 
-	// Find the category index
-	for i, part := range parts {
-		if part == category && i+1 < len(parts) {
-			// Next part should be symbol
-			symbol := parts[i+1]
-			// Skip if it starts with dt= (date partition)
-			if !strings.HasPrefix(symbol, "dt=") {
-				return symbol
+	parts := strings.Split(cleanPath, string(filepath.Separator))
+
+	if len(parts) >= 2 {
+		dir := parts[len(parts)-2]
+
+		var symbol string
+		if strings.HasPrefix(dir, "hour=") {
+			if len(parts) >= 4 {
+				symbol = parts[len(parts)-4]
 			}
+		} else if strings.HasPrefix(dir, "dt=") {
+			if len(parts) >= 3 {
+				symbol = parts[len(parts)-3]
+			}
+		} else {
+			symbol = dir
+		}
+
+		if strings.HasPrefix(symbol, "dt=") || symbol == category || symbol == exchange || symbol == source {
+			if len(parts) >= 3 {
+				symbol = parts[len(parts)-3]
+				if strings.HasPrefix(symbol, "dt=") && len(parts) >= 4 {
+					symbol = parts[len(parts)-4]
+				}
+			}
+		}
+
+		// Symbol is extracted from directory path, no need to process filename
+		// Old logic for "part-{symbol}-{timestamp}" format is removed
+		// New format is "{channel}-{timestamp}" where symbol is in directory path
+
+		if symbol != "" && symbol != exchange && symbol != source && symbol != category && !strings.HasPrefix(symbol, "dt=") {
+			return symbol
 		}
 	}
 
 	return "unknown"
+}
+
+func (fs *FileScanner) extractHourFromPath(path string) string {
+	cleanPath := filepath.Clean(path)
+	parts := strings.Split(cleanPath, string(filepath.Separator))
+
+	for i := len(parts) - 2; i >= 0; i-- {
+		segment := parts[i]
+		if strings.HasPrefix(segment, "hour=") {
+			hour := strings.TrimPrefix(segment, "hour=")
+			if isValidHour(hour) {
+				return hour
+			}
+		}
+		if strings.HasPrefix(segment, "dt=") {
+			break
+		}
+	}
+
+	filename := filepath.Base(cleanPath)
+	if strings.HasSuffix(filename, ".arrow.tmp") {
+		filename = strings.TrimSuffix(filename, ".tmp")
+	}
+	filename = strings.TrimSuffix(filename, filepath.Ext(filename))
+
+	if idx := strings.LastIndex(filename, "T"); idx >= 0 && len(filename) >= idx+3 {
+		hour := filename[idx+1 : idx+3]
+		if isValidHour(hour) {
+			return hour
+		}
+	}
+
+	for _, token := range strings.Split(filename, "-") {
+		if isValidHour(token) {
+			return token
+		}
+	}
+
+	return ""
+}
+
+func isValidHour(hour string) bool {
+	if len(hour) != 2 {
+		return false
+	}
+	if hour[0] < '0' || hour[0] > '9' || hour[1] < '0' || hour[1] > '9' {
+		return false
+	}
+	value, err := strconv.Atoi(hour)
+	if err != nil {
+		return false
+	}
+	return value >= 0 && value <= 23
 }
 
 // findAllCategoryFiles handles "All books", "All trades" etc.
@@ -372,12 +477,11 @@ func (fs *FileScanner) findAllCategoryFiles(ctx context.Context, params domain.S
 						default:
 						}
 
-						basePath := filepath.Join(categoryPath, symbol, fmt.Sprintf("dt=%s", date))
-						if hour != "" {
-							basePath = filepath.Join(basePath, fmt.Sprintf("hour=%s", hour))
-						}
+						symbolPath := filepath.Join(categoryPath, symbol, fmt.Sprintf("dt=%s", date))
+						scanParams := params
+						scanParams.Hour = hour
 
-						files, err := fs.scanPath(basePath, params)
+						files, err := fs.scanPath(symbolPath, scanParams)
 						if err != nil {
 							continue
 						}
@@ -388,7 +492,9 @@ func (fs *FileScanner) findAllCategoryFiles(ctx context.Context, params domain.S
 							files[i].Category = category
 							files[i].Symbol = symbol
 							files[i].Date = date
-							files[i].Hour = hour
+							if files[i].Hour == "" {
+								files[i].Hour = hour
+							}
 						}
 
 						allFiles = append(allFiles, files...)

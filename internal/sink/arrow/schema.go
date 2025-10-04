@@ -7,45 +7,19 @@ import (
 // Common field indices for all schemas
 const (
 	// Common fields (present in all schemas)
-	ExchangeIdx = iota
-	ChannelIdx
-	SymbolIdx
+	SymbolIdx = iota
 	PairOrCurrencyIdx
-	ConnIDIdx
-	ChanIDIdx
-	SubIDIdx
-	TsMicrosIdx
-	ConfFlagsIdx
 	SeqIdx
-	SrvMTSIdx
-	WSTSIdx
 	RecvTSIdx
-	BatchIDIdx
-	IngestIDIdx
-	SourceFileIdx
-	LineNoIdx
 )
 
 // GetCommonFields returns the common fields used in all schemas
 func GetCommonFields() []arrow.Field {
 	return []arrow.Field{
-		{Name: "exchange", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "channel", Type: arrow.BinaryTypes.String, Nullable: false},
 		{Name: "symbol", Type: arrow.BinaryTypes.String, Nullable: false},
 		{Name: "pair_or_currency", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "conn_id", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "chan_id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
-		{Name: "sub_id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "ts_us", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
-		{Name: "conf_flags", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
 		{Name: "seq", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "srv_mts", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "ws_ts", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 		{Name: "recv_ts", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
-		{Name: "batch_id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "ingest_id", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "source_file", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "line_no", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}
 }
 
@@ -93,15 +67,13 @@ func GetTradeSchema() *arrow.Schema {
 func GetBookLevelSchema() *arrow.Schema {
 	fields := GetCommonFields()
 
-	// Add book level-specific fields
+	// Add book level-specific fields (including batch_id for books)
 	bookFields := []arrow.Field{
+		{Name: "batch_id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 		{Name: "price", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
 		{Name: "count", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "amount", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
 		{Name: "side", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "prec", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "freq", Type: arrow.BinaryTypes.String, Nullable: false},
-		{Name: "len", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "is_snapshot", Type: arrow.FixedWidthTypes.Boolean, Nullable: false},
 	}
 
@@ -113,8 +85,9 @@ func GetBookLevelSchema() *arrow.Schema {
 func GetRawBookEventSchema() *arrow.Schema {
 	fields := GetCommonFields()
 
-	// Add raw book event-specific fields
+	// Add raw book event-specific fields (including batch_id for raw books)
 	rawBookFields := []arrow.Field{
+		{Name: "batch_id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 		{Name: "order_id", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
 		{Name: "price", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
 		{Name: "amount", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
@@ -124,5 +97,24 @@ func GetRawBookEventSchema() *arrow.Schema {
 	}
 
 	fields = append(fields, rawBookFields...)
+	return arrow.NewSchema(fields, nil)
+}
+
+// GetCandleSchema returns the Arrow schema for candle data
+func GetCandleSchema() *arrow.Schema {
+	fields := GetCommonFields()
+
+	// Add candle-specific fields
+	candleFields := []arrow.Field{
+		{Name: "mts", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
+		{Name: "open", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
+		{Name: "close", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
+		{Name: "high", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
+		{Name: "low", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
+		{Name: "volume", Type: arrow.PrimitiveTypes.Float64, Nullable: false},
+		{Name: "is_snapshot", Type: arrow.FixedWidthTypes.Boolean, Nullable: false},
+	}
+
+	fields = append(fields, candleFields...)
 	return arrow.NewSchema(fields, nil)
 }

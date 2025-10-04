@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,14 +16,17 @@ import (
 	"github.com/trade-engine/data-controller/internal/config"
 )
 
+const wsReadTimeout = 30 * time.Second
+
 type ConnectionManager struct {
-	cfg         *config.Config
-	logger      *zap.Logger
-	connMutex   sync.RWMutex
-	connections map[string]*Connection
-	router      *Router
-	ctx         context.Context
-	cancel      context.CancelFunc
+	cfg                 *config.Config
+	logger              *zap.Logger
+	connMutex           sync.RWMutex
+	connections         map[string]*Connection
+	router              *Router
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	customSubscriptions []SubscribeRequest
 }
 
 type Connection struct {
@@ -55,7 +60,8 @@ type ChannelInfo struct {
 type SubscribeRequest struct {
 	Event   string  `json:"event"`
 	Channel string  `json:"channel"`
-	Symbol  string  `json:"symbol"`
+	Symbol  string  `json:"symbol,omitempty"`
+	Key     string  `json:"key,omitempty"`
 	Prec    *string `json:"prec,omitempty"`
 	Freq    *string `json:"freq,omitempty"`
 	Len     *string `json:"len,omitempty"`
@@ -80,6 +86,7 @@ type SubscribeResponse struct {
 	Channel string `json:"channel"`
 	ChanID  int32  `json:"chanId"`
 	Symbol  string `json:"symbol"`
+	Key     string `json:"key,omitempty"`
 	Pair    string `json:"pair"`
 	Prec    string `json:"prec,omitempty"`
 	Freq    string `json:"freq,omitempty"`
@@ -101,6 +108,10 @@ func NewConnectionManager(cfg *config.Config, logger *zap.Logger, router *Router
 
 func (cm *ConnectionManager) Start() error {
 	return cm.StartWithSymbols(cm.cfg.Symbols)
+}
+
+func (cm *ConnectionManager) SetCustomSubscriptions(subs []SubscribeRequest) {
+	cm.customSubscriptions = subs
 }
 
 func (cm *ConnectionManager) StartWithSymbols(symbols []string) error {
@@ -172,57 +183,11 @@ func (cm *ConnectionManager) createConnection(connID string, symbols []string) (
 		router:         cm.router,
 	}
 
-	for _, symbol := range symbols {
-		if cm.cfg.Channels.Ticker.Enabled {
-			conn.subscribeQueue = append(conn.subscribeQueue, SubscribeRequest{
-				Event:   "subscribe",
-				Channel: "ticker",
-				Symbol:  symbol,
-			})
-		}
-
-		if cm.cfg.Channels.Trades.Enabled {
-			conn.subscribeQueue = append(conn.subscribeQueue, SubscribeRequest{
-				Event:   "subscribe",
-				Channel: "trades",
-				Symbol:  symbol,
-			})
-		}
-
-		if cm.cfg.Channels.Books.Enabled {
-			prec := cm.cfg.Channels.Books.Precision
-			freq := cm.cfg.Channels.Books.Frequency
-			len := fmt.Sprintf("%d", cm.cfg.Channels.Books.Length)
-			subID := int64(time.Now().UnixNano())
-
-			conn.subscribeQueue = append(conn.subscribeQueue, SubscribeRequest{
-				Event:   "subscribe",
-				Channel: "book",
-				Symbol:  symbol,
-				Prec:    &prec,
-				Freq:    &freq,
-				Len:     &len,
-				SubID:   &subID,
-			})
-		}
-
-		if cm.cfg.Channels.RawBooks.Enabled {
-			prec := cm.cfg.Channels.RawBooks.Precision
-			freq := cm.cfg.Channels.RawBooks.Frequency
-			len := fmt.Sprintf("%d", cm.cfg.Channels.RawBooks.Length)
-			subID := int64(time.Now().UnixNano() + 1)
-
-			conn.subscribeQueue = append(conn.subscribeQueue, SubscribeRequest{
-				Event:   "subscribe",
-				Channel: "book",
-				Symbol:  symbol,
-				Prec:    &prec,
-				Freq:    &freq,
-				Len:     &len,
-				SubID:   &subID,
-			})
-		}
-	}
+	// Use custom subscriptions from GUI panels for all channels.
+	// Each channel panel (Ticker, Trades, Books, RawBooks, Candles) provides
+	// its own symbol-specific subscriptions via GetSubscriptions().
+	// This ensures each channel only subscribes to its selected symbols.
+	conn.subscribeQueue = append(conn.subscribeQueue, cm.customSubscriptions...)
 
 	return conn, nil
 }
@@ -375,6 +340,7 @@ func (c *Connection) readLoop(ctx context.Context) {
 		default:
 		}
 
+		// Get connection reference - must be done in each iteration
 		c.connMutex.RLock()
 		conn := c.conn
 		c.connMutex.RUnlock()
@@ -384,16 +350,28 @@ func (c *Connection) readLoop(ctx context.Context) {
 			return
 		}
 
-		// Set read deadline to allow graceful shutdown
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(wsReadTimeout)); err != nil {
+			c.logger.Error("Failed to set read deadline", zap.Error(err))
+			return
+		}
 
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			// Check if it's a timeout (expected during shutdown)
-			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-				continue
+			// If we hit a timeout, treat it as a signal to reconnect rather than looping on a failed connection.
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				c.logger.Warn("WebSocket read timeout", zap.String("conn_id", c.ID))
+			} else if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				c.logger.Info("WebSocket closed", zap.String("conn_id", c.ID), zap.Error(err))
+			} else {
+				c.logger.Error("WebSocket read error", zap.String("conn_id", c.ID), zap.Error(err))
 			}
-			c.logger.Error("Read error", zap.Error(err))
+
+			c.connMutex.Lock()
+			if c.conn != nil {
+				c.conn.Close()
+				c.conn = nil
+			}
+			c.connMutex.Unlock()
 			return
 		}
 
@@ -451,18 +429,53 @@ func (c *Connection) processMessage(data []byte) error {
 		return fmt.Errorf("failed to unmarshal channel ID: %w", err)
 	}
 
+	// Check if array[1] is a string (special message type)
 	var msgType string
 	if err := json.Unmarshal(array[1], &msgType); err != nil {
+		// array[1] is not a string, it's data
+		// Check if we have SEQ_ALL format: [CHANNEL_ID, DATA, SEQUENCE, TIMESTAMP]
+		if len(array) == 4 {
+			// Try to parse array[2] as sequence number
+			var seq int64
+			if err := json.Unmarshal(array[2], &seq); err == nil {
+				c.logger.Debug("SEQ_ALL format detected",
+					zap.Int32("chan_id", chanID),
+					zap.Int64("seq", seq),
+					zap.Int("array_len", len(array)))
+				return c.handleDataMessageWithSeq(chanID, seq, array[1:2])
+			}
+		}
+		// No sequence, normal data message: [CHANNEL_ID, DATA] or [CHANNEL_ID, DATA, TIMESTAMP]
 		return c.handleDataMessage(chanID, array[1:])
 	}
 
+	// array[1] is a string - special message type
 	switch msgType {
 	case "hb":
+		// Heartbeat can be [CHANNEL_ID, "hb"] or [CHANNEL_ID, "hb", SEQUENCE, TIMESTAMP]
+		if len(array) == 4 {
+			var seq int64
+			if err := json.Unmarshal(array[2], &seq); err == nil {
+				c.logger.Debug("Heartbeat with sequence",
+					zap.Int32("chan_id", chanID),
+					zap.Int64("seq", seq))
+			}
+		}
 		return c.handleHeartbeat(chanID)
 	case "cs":
+		// Checksum: [CHANNEL_ID, "cs", CHECKSUM] or [CHANNEL_ID, "cs", CHECKSUM, SEQUENCE, TIMESTAMP]
 		if len(array) >= 3 {
 			var checksum int32
 			if err := json.Unmarshal(array[2], &checksum); err == nil {
+				if len(array) == 5 {
+					var seq int64
+					if err := json.Unmarshal(array[3], &seq); err == nil {
+						c.logger.Debug("Checksum with sequence",
+							zap.Int32("chan_id", chanID),
+							zap.Int32("checksum", checksum),
+							zap.Int64("seq", seq))
+					}
+				}
 				return c.handleChecksum(chanID, checksum)
 			}
 		}
@@ -495,19 +508,43 @@ func (c *Connection) handleInfoMessage(info *InfoMessage) error {
 }
 
 func (c *Connection) handleSubscribeResponse(resp *SubscribeResponse) error {
+	// For candles channel, extract symbol from key (format: "trade:1m:tBTCUSD" or "trade:1m:tBTC:EURR")
+	symbol := resp.Symbol
+	pair := resp.Pair
+	if resp.Channel == "candles" && resp.Key != "" && symbol == "" {
+		parts := strings.Split(resp.Key, ":")
+		if len(parts) >= 3 {
+			// Join parts[2:] to handle symbols like tBTC:EURR
+			symbol = strings.Join(parts[2:], ":")
+			// Extract pair from symbol (remove 't' or 'f' prefix)
+			if len(symbol) > 1 {
+				pair = symbol[1:]
+			}
+		}
+	}
+
 	c.logger.Info("Channel subscribed",
 		zap.String("channel", resp.Channel),
 		zap.Int32("chan_id", resp.ChanID),
-		zap.String("symbol", resp.Symbol),
+		zap.String("symbol", symbol),
+		zap.String("key", resp.Key),
 		zap.String("pair", resp.Pair))
 
 	// Find corresponding subscription request
 	var subReq *SubscribeRequest
 	c.queueMutex.Lock()
 	for i, req := range c.subscribeQueue {
-		if req.Channel == resp.Channel && req.Symbol == resp.Symbol {
-			subReq = &c.subscribeQueue[i]
-			break
+		// For candles, match by channel and key; for others, match by channel and symbol
+		if resp.Channel == "candles" {
+			if req.Channel == resp.Channel && req.Key == resp.Key {
+				subReq = &c.subscribeQueue[i]
+				break
+			}
+		} else {
+			if req.Channel == resp.Channel && req.Symbol == symbol {
+				subReq = &c.subscribeQueue[i]
+				break
+			}
 		}
 	}
 	c.queueMutex.Unlock()
@@ -515,8 +552,8 @@ func (c *Connection) handleSubscribeResponse(resp *SubscribeResponse) error {
 	channelInfo := &ChannelInfo{
 		ID:      resp.ChanID,
 		Channel: resp.Channel,
-		Symbol:  resp.Symbol,
-		Pair:    resp.Pair,
+		Symbol:  symbol,
+		Pair:    pair,
 		SubID:   resp.SubID,
 		SubReq:  *subReq,
 	}
@@ -554,6 +591,10 @@ func (c *Connection) handleChecksum(chanID int32, checksum int32) error {
 }
 
 func (c *Connection) handleDataMessage(chanID int32, data []json.RawMessage) error {
+	return c.handleDataMessageWithSeq(chanID, 0, data)
+}
+
+func (c *Connection) handleDataMessageWithSeq(chanID int32, seq int64, data []json.RawMessage) error {
 	c.channelsMutex.RLock()
 	channelInfo, exists := c.channels[chanID]
 	c.channelsMutex.RUnlock()
@@ -567,11 +608,16 @@ func (c *Connection) handleDataMessage(chanID int32, data []json.RawMessage) err
 		zap.Int32("chan_id", chanID),
 		zap.String("channel", channelInfo.Channel),
 		zap.String("symbol", channelInfo.Symbol),
+		zap.Int64("seq", seq),
 		zap.Int("data_length", len(data)))
 
 	// Route message to router if available
 	if c.router != nil {
-		return c.router.RouteMessage(chanID, channelInfo, data, c.ID)
+		var seqPtr *int64
+		if seq > 0 {
+			seqPtr = &seq
+		}
+		return c.router.RouteMessageWithSeq(chanID, channelInfo, data, c.ID, seqPtr)
 	}
 
 	c.logger.Warn("No router available for data routing")
